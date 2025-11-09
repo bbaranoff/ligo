@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 GWOSC → H1 & L1 cohérents → dE/df, E, m, nu_eff, h_eff
-- Aligne H1/L1 par scan de délai (±10 ms)
-- PSD bruit par Welch (hors signal)
-- Spectre croisé C(f) et cohérence gamma^2(f)
-- dE/df via Re{C(f)} (signal commun), robuste au bruit non corrélé
+- Auto-correction du décalage H1↔L1 (choix du signe max(Re{C}))
+- Lissage optionnel de dE/df et intégrale cumulée E(<f)
+- Export .npz (f, dEdf, E_cum, cohérence)
 
 Exemple:
-python ligo_energy_coherent.py --event GW150914 --tpad 128 \
-  --distance-mpc 410 --flow 20 --fhigh 512 --signal-win 0.3 --plot
+python ligo_energy_coherent.py --event GW150914 --distance-mpc 410 \
+  --flow 20 --fhigh 512 --signal-win 0.3 --noise-pad 50 --smooth-sigma 3 \
+  --plot --export out_gw150914.npz
 """
 
 import argparse, os, numpy as np, matplotlib.pyplot as plt
@@ -21,6 +21,10 @@ try:
 except Exception:
     from scipy.signal import get_window
     def tukey(M, alpha=0.1): return get_window(('tukey', float(alpha)), M)
+try:
+    from scipy.ndimage import gaussian_filter1d
+except Exception:
+    gaussian_filter1d = None  # lissage désactivé si indisponible
 
 # Constantes SI
 c = 299792458.0
@@ -57,30 +61,27 @@ def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
     return f, S
 
 def estimate_delay(h1, h2, fs, search_ms=10.0):
-    """Estime le délai H1→L1 (s) en maximisant la corrélation rapide (FFT)."""
-    # Fenêtre de Tukey pour éviter les fuites
+    """Délai H1→L1 (s) par corrélation rapide (signe arbitraire initial)."""
     N = min(h1.size, h2.size)
     w = tukey(N, 0.2)
     x = (h1[:N]*w); y = (h2[:N]*w)
-    # FFTs
     X = np.fft.rfft(x); Y = np.fft.rfft(y)
     R = X*np.conj(Y)
-    r = np.fft.irfft(R, n=N)  # corrélation circulaire
-    # Permuter moitié pour centrer le pic autour de 0
+    r = np.fft.irfft(R, n=N)
     r = np.concatenate([r[N//2:], r[:N//2]])
     lags = (np.arange(-N//2, N//2))/fs
-    # restreindre à ±search_ms
     mask = (lags >= -search_ms/1000.0) & (lags <= search_ms/1000.0)
     i = np.argmax(r[mask]); tau = lags[mask][i]
     return tau
 
 # -------------------- analyse cohérente --------------------
 def analyze_coherent(tsH, tsL, gps, distance_mpc, flow=20.0, fhigh=512.0,
-                     noise_pad=50.0, signal_win=0.3, plot=False, title="GW"):
+                     noise_pad=50.0, signal_win=0.3, smooth_sigma=None,
+                     plot=False, title="", export_path=None):
     if distance_mpc is None: raise SystemExit("--distance-mpc requis.")
     r = distance_mpc*Mpc
     fsH = tsH.sample_rate.value; fsL = tsL.sample_rate.value
-    if abs(fsH - fsL) > 1e-6: raise SystemExit("H1 et L1: mêmes fréquences d’échantillonnage requises.")
+    if abs(fsH - fsL) > 1e-6: raise SystemExit("H1 et L1 doivent avoir la même Fs.")
     fs = fsH
 
     # --- PSD bruit hors-signal
@@ -89,7 +90,6 @@ def analyze_coherent(tsH, tsL, gps, distance_mpc, flow=20.0, fhigh=512.0,
     fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
     fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
     if fH.size != fL.size or np.max(np.abs(fH-fL))>1e-9:
-        # on interpole S2 sur fH
         S2 = np.interp(fH, fL, S2); f = fH
     else:
         f = fH
@@ -100,86 +100,99 @@ def analyze_coherent(tsH, tsL, gps, distance_mpc, flow=20.0, fhigh=512.0,
     hH = bandpass(np.asarray(wH.value,float), fs, flow, fhigh)
     hL = bandpass(np.asarray(wL.value,float), fs, flow, fhigh)
 
-    # --- Estimation du délai H1→L1 (±10 ms)
-    tau = estimate_delay(hH, hL, fs, search_ms=10.0)
-    # applique le délai sur L1 en fréquence (phase ramp)
+    # --- Estimation du délai et auto-correction du signe
+    tau_guess = estimate_delay(hH, hL, fs, search_ms=10.0)
     N = min(hH.size, hL.size); dt = 1.0/fs; T = N*dt
     w = tukey(N, 0.2)
     H1 = np.fft.rfft(hH[:N]*w); H2 = np.fft.rfft(hL[:N]*w)
     f_short = np.fft.rfftfreq(N, d=dt)
-    ph = np.exp(-1j*2*np.pi*f_short*tau)  # décalage temporel
-    H2_al = H2 * ph
 
-    # --- PSD totales une-face (fenêtre courte)
-    S1_tot = (2.0/T)*np.abs((dt*H1))**2
-    S2_tot = (2.0/T)*np.abs((dt*H2_al))**2
+    def energy_with_tau(tau):
+        ph = np.exp(-1j*2*np.pi*f_short*tau)
+        H2_al = H2 * ph
+        S1_tot = (2.0/T)*np.abs((dt*H1))**2
+        S2_tot = (2.0/T)*np.abs((dt*H2_al))**2
+        C = (dt*H1) * np.conj(dt*H2_al) * (2.0/T)
+        S1n = np.interp(f_short, f, S1)
+        S2n = np.interp(f_short, f, S2)
+        S1_sig = np.clip(S1_tot - S1n, 0.0, np.inf)
+        S2_sig = np.clip(S2_tot - S2n, 0.0, np.inf)
+        ReC = np.real(C)
+        ReC = np.clip(ReC, 0.0, np.sqrt(S1_sig*S2_sig + 1e-300))
+        dEdf = (np.pi * c**3 * r**2 / (2.0 * G)) * (f_short**2) * ReC / (4*np.pi**2)
+        band = (f_short >= max(flow,1e-9)) & (f_short <= fhigh)
+        if band.sum()<2: return 0.0
+        df = f_short[1]-f_short[0]
+        return float(np.trapz(dEdf[band], dx=df)), ReC, S1_tot, S2_tot, dEdf
 
-    # --- Cross-spectrum et cohérence
-    C = (dt*H1) * np.conj(dt*H2_al) * (2.0/T)  # 1/Hz (une-face)
-    # Grilles de bruit sur la fenêtre courte
-    S1n = np.interp(f_short, f, S1)
-    S2n = np.interp(f_short, f, S2)
+    E_pos, ReC_pos, S1_tot_pos, S2_tot_pos, dEdf_pos = energy_with_tau(+tau_guess)
+    E_neg, ReC_neg, S1_tot_neg, S2_tot_neg, dEdf_neg = energy_with_tau(-tau_guess)
 
-    # cohérence estimée
-    gamma2 = np.abs(C)**2 / (S1_tot * S2_tot + 1e-300)
+    if E_neg > E_pos:
+        tau = -tau_guess
+        ReC, S1_tot, S2_tot, dEdf = ReC_neg, S1_tot_neg, S2_tot_neg, dEdf_neg
+    else:
+        tau = +tau_guess
+        ReC, S1_tot, S2_tot, dEdf = ReC_pos, S1_tot_pos, S2_tot_pos, dEdf_pos
 
-    # --- Spectre signal net (cohérent)
-    # Soustraction de bruit au niveau des PSD totales, puis partie réelle du cross
-    S1_sig = np.clip(S1_tot - S1n, 0.0, np.inf)
-    S2_sig = np.clip(S2_tot - S2n, 0.0, np.inf)
-    # Estimation cohérente de |h~|^2 total (2 polarisations): utiliser Re{C} bornée par S1_sig,S2_sig
-    # bornage Cauchy-Schwarz: Re{C} <= sqrt(S1_sig*S2_sig)
-    ReC = np.real(C)
-    ReC = np.clip(ReC, 0.0, np.sqrt(S1_sig*S2_sig + 1e-300))
-
-    # --- dE/df avec Re{C}
-    # Attention: on est en fréquence linéaire f, déjà "une-face". On applique la correction angulaire 1/(2π)^2.
-    dEdf = (np.pi * c**3 * r**2 / (2.0 * G)) * (f_short**2) * ReC / (4*np.pi**2)
-
-    # --- Intégrations (bande utile, éviter f=0)
+    # --- Bande utile et lissage optionnel
     band = (f_short >= max(flow,1e-9)) & (f_short <= fhigh)
-    f_use = f_short[band]; dEdf_use = dEdf[band]
-    if f_use.size<2: raise SystemExit("Bande trop étroite.")
+    f_use = f_short[band]
+    dEdf_use = dEdf[band]
+    # --- Nettoyage et lissage plus fort ---
+    dEdf_use = np.nan_to_num(dEdf_use, nan=0.0, posinf=0.0, neginf=0.0)
+    if smooth_sigma and gaussian_filter1d is not None:
+        dEdf_use = gaussian_filter1d(dEdf_use, sigma=float(smooth_sigma))
+    else:
+    # moyenne glissante basique
+        kernel = 5
+        dEdf_use = np.convolve(dEdf_use, np.ones(kernel)/kernel, mode='same')
+
+    # --- Intégration
     df = f_use[1]-f_use[0]
     E = np.trapz(dEdf_use, dx=df)
+    E_cum = np.cumsum(dEdf_use) * df
     m = E/c**2; m_sun = m/M_sun
     nu_eff = np.trapz(f_use*dEdf_use, dx=df)/np.trapz(dEdf_use, dx=df)
     h_eff = E/nu_eff
 
-    print("\n=== RÉSULTATS COHÉRENTS H1–L1 ===")
-    print(f"délai H1→L1 estimé : {tau*1e3:.3f} ms")
+    print("\n=== RÉSULTATS COHÉRENTS H1–L1 (auto-corrigés) ===")
+    print(f"délai H1→L1 estimé : {tau*1e3:.3f} ms (signe choisi pour max(E))")
     print(f"E ~ {E:.3e} J")
     print(f"m = E/c^2 ~ {m:.3e} kg  (~ {m_sun:.2f} M_sun)")
     print(f"nu_eff ~ {nu_eff:.1f} Hz")
     print(f"h_eff ~ {h_eff:.3e} J*s")
-    print("=================================\n")
+    print("==============================================\n")
 
+    # --- Export
+    if export_path:
+        np.savez_compressed(
+            export_path,
+            f=f_use, dEdf=dEdf_use, E_cum=E_cum,
+            ReC=ReC[band], S1_tot=S1_tot[band], S2_tot=S2_tot[band]
+        )
+        print(f"[export] écrit : {export_path}")
+
+    # --- Plots (facultatif)
     if plot:
-        # cohérence
+        # cohérence gamma^2
+        gamma2 = np.abs(ReC)**2 / (S1_tot * S2_tot + 1e-300)
         plt.figure(figsize=(9,4))
-        plt.semilogx(f_short[1:], np.clip(gamma2[1:],0,1), lw=1)
+        plt.semilogx(f_use[1:], np.clip(gamma2[band][1:],0,1), lw=1)
         plt.axvspan(flow, fhigh, color="gray", alpha=0.2)
         plt.ylim(0,1.05); plt.xlabel("Fréquence (Hz)"); plt.ylabel(r"$\gamma^2(f)$")
-        plt.title("Cohérence H1–L1 (fenêtre courte)")
-        plt.tight_layout(); plt.show()
+        plt.title("Cohérence H1–L1 (fenêtre courte)"); plt.tight_layout(); plt.show()
 
-        # PSDs et cross
-        plt.figure(figsize=(9,4))
-        plt.loglog(f[1:], S1[1:], label="PSD bruit H1", alpha=0.8)
-        plt.loglog(f[1:], S2[1:], label="PSD bruit L1", alpha=0.8)
-        plt.loglog(f_short[1:], S1_tot[1:], label="PSD totale H1 (fenêtre)", alpha=0.6)
-        plt.loglog(f_short[1:], S2_tot[1:], label="PSD totale L1 (fenêtre)", alpha=0.6)
-        plt.loglog(f_short[1:], np.maximum(ReC[1:],1e-60), label="Re{C} (signal cohérent)", alpha=0.9)
-        plt.axvspan(flow, fhigh, color="gray", alpha=0.2)
-        plt.xlabel("Fréquence (Hz)"); plt.ylabel("1/Hz")
-        plt.legend(); plt.tight_layout(); plt.show()
-
-        # dE/df
+        # dE/df et E_cum
         plt.figure(figsize=(9,4))
         plt.loglog(f_use, dEdf_use, lw=1)
         plt.xlabel("Fréquence (Hz)"); plt.ylabel("dE/df (J/Hz)")
-        plt.title(f"{title} — dE/df cohérent (Re{{C}})")
-        plt.tight_layout(); plt.show()
+        plt.title(f"{title} — dE/df cohérent (Re{{C}})"); plt.tight_layout(); plt.show()
+
+        plt.figure(figsize=(9,4))
+        plt.semilogx(f_use, E_cum, lw=1)
+        plt.xlabel("Fréquence (Hz)"); plt.ylabel("E(<f) (J)")
+        plt.title(f"{title} — Énergie cumulée"); plt.tight_layout(); plt.show()
 
 def main():
     ap = argparse.ArgumentParser()
@@ -190,21 +203,22 @@ def main():
     ap.add_argument("--fhigh", type=float, default=512.0)
     ap.add_argument("--signal-win", type=float, default=0.3)
     ap.add_argument("--noise-pad", type=float, default=50.0)
+    ap.add_argument("--smooth-sigma", type=float, default=None, help="σ Gauss pour lisser dE/df")
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--export", default=None, help="Chemin .npz d’export (facultatif)")
     args = ap.parse_args()
 
     gps = datasets.event_gps(args.event)
     t0, t1 = gps - args.tpad, gps + args.tpad
-
-    # Téléchargement
-    H1 = fetch("H1", t0, t1)
-    L1 = fetch("L1", t0, t1)
+    H1 = fetch("H1", t0, t1); L1 = fetch("L1", t0, t1)
 
     analyze_coherent(
         H1, L1, gps, args.distance_mpc,
         flow=args.flow, fhigh=args.fhigh,
         noise_pad=args.noise_pad, signal_win=args.signal_win,
-        plot=args.plot, title=f"{args.event}"
+        smooth_sigma=args.smooth_sigma,
+        plot=args.plot, title=f"{args.event}",
+        export_path=args.export
     )
 
 if __name__ == "__main__":
