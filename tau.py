@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import numpy as np
 
 CLUSTERS_FILE = "spectral_clusters.json"
-ANCHOR_EVENT = "GW190521"
-ANCHOR_DATE  = datetime(2017,9,27,9,50,44,400000)
+ANCHOR_EVENT = "GW150914"
+ANCHOR_DATE  = datetime(2015,9,14,9,50,44,400000)
 
 # ----------------------------------------------------
 # Chargement + reconstruction τ
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     tau = load_tau()
     tau_ref = tau[ANCHOR_EVENT]
 
-    print("=== TAU ORDRE AVANT REGRESSION (Dates inexactes)===\n")
+    print("=== TAU ORDRE ===\n")
     ev_sorted = sorted(tau.items(), key=lambda x: x[1])
     for ev, τ in ev_sorted:
         print(f"{ev:20s} τ={τ:10.3f} → {tau_to_date(τ, tau_ref)}")
