@@ -153,9 +153,4 @@ EOF
            "$ev" "$REG" "${DIST}Mpc" "$NU" "$TAUMS" "$ELIGO" "$ETOI" "$DELTA"
 
 done
-if [ -f "plot_all_spectra.py" ]; then
-  echo ""
-  echo "📊 Génération du graphe comparatif..."
-  python3 plot_all_spectra.py || echo "⚠️  Impossible de tracer le graphe."
-  echo "============================================================="
-fi
+python3 plot_all_spectra.py || echo "⚠️  Impossible de tracer le graphe."
