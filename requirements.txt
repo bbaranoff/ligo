@@ -1,7 +1,6 @@
 astropy==5.2.2
 backports.zoneinfo==0.2.1
 beautifulsoup4==4.14.2
-Bottleneck @ file:///croot/bottleneck_1707864210935/work
 certifi==2025.11.12
 cffi==1.17.1
 charset-normalizer==3.4.4
@@ -31,15 +30,10 @@ lscsoft-glue==4.1.1
 Mako==1.3.10
 MarkupSafe==2.1.5
 matplotlib==3.7.5
-mkl-fft @ file:///croot/mkl_fft_1695058164594/work
-mkl-random @ file:///croot/mkl_random_1695059800811/work
 mkl-service==2.4.0
 mpld3==0.5.12
 narwhals==1.42.1
-numexpr @ file:///croot/numexpr_1683221822650/work
-numpy @ file:///work/mkl/numpy_and_numpy_base_1682953417311/work
 packaging==25.0
-pandas @ file:///croot/pandas_1692289311655/work
 pegasus-wms.api==5.1.1
 pegasus-wms.common==5.1.1
 pillow==10.4.0
@@ -50,9 +44,7 @@ pyerfa==2.0.0.3
 PyJWT==2.9.0
 pykerr==0.1.0
 pyparsing==3.1.4
-python-dateutil @ file:///croot/python-dateutil_1716495738603/work
 python-ligo-lw==1.8.4
-pytz @ file:///croot/pytz_1713974312559/work
 PyYAML==6.0.3
 regex==2024.11.6
 requests==2.32.4
@@ -60,12 +52,10 @@ safe-netrc==1.0.1
 scikit-learn==1.3.2
 scipy==1.10.1
 scitokens==1.8.1
-six @ file:///tmp/build/80754af9/six_1644875935023/work
 soupsieve==2.7
 threadpoolctl==3.5.0
 tqdm==4.67.1
 typing_extensions==4.13.2
-tzdata @ file:///croot/python-tzdata_1746123641790/work
 tzlocal==5.2
 urllib3==2.2.3
 zipp==3.20.2
