@@ -113,7 +113,7 @@ for ev in "${EVENTS[@]}"; do
     DIST="${DIST_MPC[$ev]:-???}"
 
     # ---- EXECUTE PYTHON ANALYSIS ----
-    python ligo_spectral_planck.py --event "$ev" --distance-mpc "$DIST" > /dev/null || continue
+    python ligo_spectral_planck.py --event "$ev" --distance-mpc "$DIST" --json > test
 
     JSON="results/${ev}.json"
     [[ -f "$JSON" ]] || { echo "[ERR] $ev: JSON manquant"; continue; }
