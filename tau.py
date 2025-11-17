@@ -98,7 +98,7 @@ if __name__ == "__main__":
     tau = load_tau()
     tau_ref = tau[ANCHOR_EVENT]
 
-    print("=== TAU ORDRE ===\n")
+    print("=== TAU ORDRE AVANT REGRESSION (Dates inexactes)===\n")
     ev_sorted = sorted(tau.items(), key=lambda x: x[1])
     for ev, τ in ev_sorted:
         print(f"{ev:20s} τ={τ:10.3f} → {tau_to_date(τ, tau_ref)}")
