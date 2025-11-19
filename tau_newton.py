@@ -3,7 +3,7 @@ import json
 import math
 from datetime import datetime, timedelta
 
-CLUSTERS_FILE = "spectral_clusters.json"
+CLUSTERS_FILE = "spectral_invariants.json"
 
 # -----------------------------------------------------------
 # Paramètres du modèle spectral interne τ(t)
@@ -12,14 +12,17 @@ CLUSTERS_FILE = "spectral_clusters.json"
 ALPHA = 0.40
 OMEGA = 1.0
 
+# Facteur multiplicatif pour les τ
+K_FACTOR = 1e5  # Vous pouvez ajuster ce facteur
+
 # La constante C est choisie pour forcer τ(GW150914) à correspondre
 # exactement à t = date_LIGO(GW150914)
-ANCHOR_EVENT = "GW150914"
-ANCHOR_DATE  = datetime(2015, 9, 14)  # date LIGO officielle : 2015-09-14
+ANCHOR_EVENT = "GW151226"
+ANCHOR_DATE  = datetime(2015, 12, 26)  # date LIGO officielle : 2017-08-23
 ANCHOR_T_LIGO = 0.0  # on définit t=0 pour l'ancre
 
 # -----------------------------------------------------------
-# Reconstruction brute des τ depuis spectral_clusters.json
+# Reconstruction brute des τ depuis spectral_invariants.json
 # -----------------------------------------------------------
 def load_tau():
     with open(CLUSTERS_FILE, "r") as f:
@@ -27,20 +30,11 @@ def load_tau():
 
     tau = {}
 
-    for cid, cluster in data.items():
-        T0 = cluster["T0_days"]
-
-        # Tous les membres = T0
-        for ev in cluster["members"]:
-            tau[ev] = T0
-
-        # Ajoute dt_pred_days pour chaque paire
-        for p in cluster["pairs"]:
-            A_ev, B_ev = p["A"], p["B"]
-            dt = p["dt_pred_days"]
-
-            tau[B_ev] = T0
-            tau[A_ev] = T0 + dt
+    for ev, event_data in data.items():
+        # Utilise tau_s et neff depuis le JSON
+        tau_raw = event_data["tau_s"]
+        neff = event_data.get("neff", 1.0)  # Si neff n'existe pas, utilise 1.0 par défaut
+        tau[ev] = K_FACTOR * neff * tau_raw
 
     # Normalisation : min(tau) → 0
     base = min(tau.values())
@@ -108,6 +102,8 @@ if __name__ == "__main__":
     C = compute_C(tau_anchor)
 
     print("=== TAU ORDRE (INVERSION NEWTON, MODÈLE SPECTRAL) ===\n")
+    print(f"Facteur K: {K_FACTOR}")
+    print(f"Ancre: {ANCHOR_EVENT}, τ_ancre: {tau_anchor:.6f}, C: {C:.6f}\n")
 
     # Trie par τ croissant
     ev_sorted = sorted(tau_dict.items(), key=lambda x: x[1])
@@ -120,4 +116,4 @@ if __name__ == "__main__":
         # conversion t → date réelle
         date_real = t_to_date(t_real)
 
-        print(f"{ev:20s}  τ={tau_value:10.3f}  t={t_real:12.6f} j  →  {date_real}")
+        print(f"{ev:20s}  τ={tau_value:10.6f}  t={t_real:12.6f} j  →  {date_real}")

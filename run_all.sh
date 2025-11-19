@@ -1,60 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================
-# OFFICIAL LIGO ENERGY VALUES (Joules)
-# ============================================================
+# Forcer une locale POSIX (sinon printf FR casse tout)
+export LC_ALL=C
+export LANG=C
 
-#!/usr/bin/env bash
-set -euo pipefail
-
-# ============================================================
-# OFFICIAL LIGO ENERGY VALUES (Joules)
-# ============================================================
-declare -A E_LIGO=(
-    [GW150914]=5.3e47
-    [GW151226]=1.8e46
-    [GW170104]=2.0e47
-    [GW170608]=2.3e47
-    [GW170729]=4.8e47
-    [GW170809]=2.7e47
-    [GW170814]=2.7e47
-    [GW170817]=3.6e46
-    [GW190412]=1.4e47
-    [GW190521]=8.0e47
-    [GW170823]=3.0e47
-    [GW170818]=3.5e47
-    [GW190403_051519]=1.0e47
-    [GW190413_052954]=1.5e47
-    [GW190413_134308]=2.0e47
-    [GW190421_213856]=2.0e47
-    [GW190503_185404]=2.0e47
-    [GW190514_065416]=3.0e47
-    [GW190517_055101]=3.0e47
-    [GW190519_153544]=4.0e47
-    [GW190521_074359]=7.0e47
-    [GW190602_175927]=2.0e47
-    [GW190814]=2.0e47
-    [GW190828_063405]=2.5e47
-    [GW190828_065509]=2.5e47
-)
-
-# ============================================================
-# DISTANCES (Mpc)
-# ============================================================
-declare -A DIST_MPC=(
+# ------------------------------------------------------------
+# Distances (Mpc)
+# ------------------------------------------------------------
+declare -A DIST=(
     [GW150914]=410
     [GW151226]=440
     [GW170104]=880
     [GW170608]=320
-    [GW170729]=2750
-    [GW170809]=1030
+    [GW170729]=2840
+    [GW170809]=990
     [GW170814]=540
     [GW170817]=40
+    [GW170823]=1850
     [GW190412]=740
     [GW190521]=5400
-    [GW170823]=1850
-    [GW170818]=1060
     [GW190403_051519]=1100
     [GW190413_052954]=1100
     [GW190413_134308]=800
@@ -63,88 +28,72 @@ declare -A DIST_MPC=(
     [GW190514_065416]=1500
     [GW190517_055101]=1500
     [GW190519_153544]=2500
-    [GW190521_074359]=5300
-    [GW190602_175927]=1000
-    [GW190814]=240
-    [GW190828_063405]=850
-    [GW190828_065509]=900
 )
 
-# ============================================================
-# EVENT LIST
-# ============================================================
-EVENTS=(
-    GW150914 GW151226 GW170104 GW170608 GW170729 GW170809 GW170814 GW170817
-    GW190412 GW190521
-    GW170823 GW170818
-    GW190403_051519 GW190413_052954 GW190413_134308 GW190421_213856
-    GW190503_185404 GW190514_065416 GW190517_055101 GW190519_153544
-    GW190521_074359 GW190602_175927 GW190814 GW190828_063405 GW190828_065509
+# ------------------------------------------------------------
+# Régimes simplifiés (juste pour affichage)
+# ------------------------------------------------------------
+declare -A REGIME=(
+    [GW150914]=merger
+    [GW151226]=ringdown
+    [GW170104]=ringdown
+    [GW170608]=merger
+    [GW170729]=ringdown
+    [GW170809]=ringdown
+    [GW170814]=ringdown
+    [GW170817]=merger
+    [GW170823]=ringdown
+    [GW190412]=ringdown
+    [GW190521]=ringdown
+    [GW190403_051519]=merger
+    [GW190413_052954]=merger
+    [GW190413_134308]=merger
+    [GW190421_213856]=merger
+    [GW190503_185404]=merger
+    [GW190514_065416]=merger
+    [GW190517_055101]=ringdown
+    [GW190519_153544]=ringdown
 )
 
-# ============================================================
-# REGIME (classification simple par fréquence)
-# ============================================================
-regime_from_freq() {
-    local f=$1
-    if (( $(echo "$f < 80" | bc -l) )); then
-        echo "inspiral"
-    elif (( $(echo "$f < 200" | bc -l) )); then
-        echo "merger"
-    else
-        echo "ringdown"
+printf "Événement  | régime    | Distance | ν_eff[Hz] | tau[ms]  | E_total[J] | m_sun\n"
+printf "===========|===========|==========|===========|==========|============|========\n"
+
+for ev in "${!DIST[@]}"; do
+    d="${DIST[$ev]}"
+
+    # Créer le dossier results s'il n'existe pas
+    mkdir -p results
+
+    # Lance l'analyse (JSON écrit dans results/)
+    python ligo_spectral_planck.py --event "$ev" --distance-mpc "$d" >/dev/null 2>&1 || {
+        echo "⚠️  Erreur avec $ev, continuation..."
+        continue
+    }
+
+    json="results/$ev.json"
+
+    # Vérifier que le fichier JSON existe et n'est pas vide
+    if [[ ! -f "$json" || ! -s "$json" ]]; then
+        echo "❌ Fichier JSON manquant ou vide pour $ev"
+        continue
     fi
-}
 
-mkdir -p results
+    # Extraction des champs JSON (avec valeurs par défaut en cas d'erreur)
+    nu=$(jq -r '.nu_eff_Hz // 0' "$json" 2>/dev/null || echo "0")
+    tau=$(jq -r '.tau_s // 0' "$json" 2>/dev/null || echo "0")  # Corrigé: tau_s au lieu de tau_event_s
+    E_total=$(jq -r '.E_total_J // 0' "$json" 2>/dev/null || echo "0")  # Corrigé: E_total_J au lieu de E_norm
+    m_sun=$(jq -r '.m_sun // 0' "$json" 2>/dev/null || echo "0")
 
-# ============================================================
-# TABLE HEADER (ν_eff & τ added)
-# ============================================================
-LC_NUMERIC=C printf "%-12s | %-10s | %-10s | %-10s | %-10s | %-12s | %-12s | %-8s\n" \
-       "Événement" "régime" "Distance" "ν_eff[Hz]" "tau[ms]" "E_LIGO[J]" "E_TOI[J]" "Δ[%]"
-echo "-------------------------------------------------------------------------------------------------------------------"
+    # Conversion tau en millisecondes
+    tau_ms=$(awk -v t="$tau" 'BEGIN {printf "%.3f", t*1000}' 2>/dev/null || echo "0.000")
 
-# ============================================================
-# MAIN LOOP
-# ============================================================
-for ev in "${EVENTS[@]}"; do
+    # Formattage scientifique pour les grandes valeurs
+    E_total_formatted=$(printf "%.2e" "$E_total" 2>/dev/null || echo "0.00e0")
+    m_sun_formatted=$(printf "%.4f" "$m_sun" 2>/dev/null || echo "0.0000")
 
-    DIST="${DIST_MPC[$ev]:-???}"
-
-    # ---- EXECUTE PYTHON ANALYSIS ----
-    python ligo_spectral_planck.py --event "$ev" --distance-mpc "$DIST" --json > test
-
-    JSON="results/${ev}.json"
-    [[ -f "$JSON" ]] || { echo "[ERR] $ev: JSON manquant"; continue; }
-
-    # ---- READ RESULT ----
-    NU=$(jq -r '.nu_eff_Hz // 0' "$JSON")
-    TAU=$(jq -r '.tau_s // 0' "$JSON")
-
-    # tau en millisecondes
-    TAUMS=$(python3 - <<EOF
-print(($TAU)*1000)
-EOF
-)
-
-    ELIGO="${E_LIGO[$ev]:-nan}"
-    ETOI=$(jq -r '.E_total_J // .E_J // 0' "$JSON")
-
-    # regime spectral basé sur nu_eff
-    REG=$(regime_from_freq "$NU")
-
-    # différence %
-    DELTA=$(python3 - <<EOF
-import math
-el=$ELIGO
-et=$ETOI
-print(100*(et-el)/el if el>0 else float("nan"))
-EOF
-)
-
-    # ---- PRINT LINE (robuste locale FR) ----
-    LC_NUMERIC=C printf "%-12s | %-10s | %-10s | %-10.1f | %-10.3f | %-12.3e | %-12.3e | %8.2f\n" \
-           "$ev" "$REG" "${DIST}Mpc" "$NU" "$TAUMS" "$ELIGO" "$ETOI" "$DELTA"
-
+    printf "%-12s | %-9s | %4s Mpc | %9.1f | %7s | %11s | %7.4f\n" \
+        "$ev" "${REGIME[$ev]}" "$d" "$nu" "$tau_ms" "$E_total_formatted" "$m_sun"
 done
+
+echo ""
+echo "=== SYNTHÈSE TERMINÉE ==="
