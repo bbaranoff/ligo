@@ -9,16 +9,16 @@ export LANG=C
 # Distances (Mpc)
 # ------------------------------------------------------------
 declare -A DIST=(
-    [GW150914]=410
-    [GW151226]=440
+    [GW150914]=440
+    [GW151226]=410
     [GW170104]=880
     [GW170608]=320
     [GW170729]=2840
     [GW170809]=990
     [GW170814]=540
-    [GW170817]=40
     [GW170823]=1850
     [GW190412]=740
+    [GW170817]=40
     [GW190521]=5400
     [GW190403_051519]=1100
     [GW190413_052954]=1100
@@ -34,16 +34,16 @@ declare -A DIST=(
 # Régimes simplifiés (juste pour affichage)
 # ------------------------------------------------------------
 declare -A REGIME=(
-    [GW150914]=merger
+    [GW150914]=ringdown
     [GW151226]=ringdown
     [GW170104]=ringdown
     [GW170608]=merger
     [GW170729]=ringdown
     [GW170809]=ringdown
     [GW170814]=ringdown
-    [GW170817]=merger
     [GW170823]=ringdown
     [GW190412]=ringdown
+    [GW170817]=ringdown
     [GW190521]=ringdown
     [GW190403_051519]=merger
     [GW190413_052954]=merger

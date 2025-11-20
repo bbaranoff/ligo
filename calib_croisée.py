@@ -95,7 +95,8 @@ t_ligo_y2 = t_ligo_y2[order2]
 # ------------------------------------------------------
 g1 = PchipInterpolator(tau_anchor_x, t_ligo_y)      # τ → t_LIGO
 g2 = PchipInterpolator(tnewton_anchor_x, t_ligo_y2) # t_newton → t_LIGO
-
+print(t_ligo_y)
+print(t_ligo_y2)
 # ------------------------------------------------------
 # 5. Moyenne croisée : g(τ) = ½[g₁(τ) + g₂(t_newton(τ))]
 # ------------------------------------------------------
