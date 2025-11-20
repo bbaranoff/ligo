@@ -7,7 +7,7 @@ import glob
 import numpy as np
 
 DAY = 86400.0  # secondes → jours
-FACTOR = 90e8
+FACTOR = 93.47e8
 # ------------------------------------------------------------
 # Charger les événements (uniquement tau & nu)
 # ------------------------------------------------------------
