@@ -25,7 +25,7 @@ from gwpy.timeseries import TimeSeries
 c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
-H_STAR = 1e10  # amplitude RMS cible
+H_STAR = 1e12  # amplitude RMS cible
 
 EVENT_PARAMS = {
     "GW150914": {"flow": 20.0, "fhigh": 350.0, "signal_win": 1.2, "noise_pad": 1200.0},
@@ -154,7 +154,7 @@ def compute_energy(H1, H2, f_short, tau, fs, Uwin, distance_mpc, flow, fhigh):
     signal_power = np.abs(C_eff)
     
     # Échelle d'énergie prenant en compte la distance pour obtenir l'énergie intrinsèque
-    energy_scale = 1e-30
+    energy_scale = 4e-35
     r = distance_mpc * Mpc
     
     dEdf = energy_scale * (r**2) * f_short**2 * signal_power
@@ -167,67 +167,106 @@ def compute_energy(H1, H2, f_short, tau, fs, Uwin, distance_mpc, flow, fhigh):
     return E_est, f_use, dEdf_use
 
 # ==========================
-# Analyse principale
+# ANALYSE SPECTRALE — VERSION CORRIGÉE
 # ==========================
 def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
                               flow=20.0, fhigh=350.0, noise_pad=1200.0,
                               signal_win=1.2, plot=False):
+
     fs = tsH.sample_rate.value
 
-    # Fenêtre de bruit sécurisée
+    # -------------------------------------------------------
+    # 0) PARAMÈTRES DYNAMIQUES
+    # -------------------------------------------------------
+    rms_win = max(0.4, signal_win * 0.5)       # RMS adaptatif
+    tau_scan_width = 0.002                     # ±2 ms
+    tau_scan_steps = 41                        # résolution 0.1 ms
+
+    # -------------------------------------------------------
+    # 1) ZONE DE BRUIT — robuste
+    # -------------------------------------------------------
     start_avail = tsH.t0.value
     try:
         if gps - noise_pad - 400.0 < start_avail:
-            noiseH = tsH.crop(start_avail, start_avail + 200.0)
-            noiseL = tsL.crop(start_avail, start_avail + 200.0)
+            noise_start, noise_end = start_avail, start_avail + 200.0
         else:
-            noiseH = tsH.crop(gps - noise_pad - 400.0, gps - noise_pad - 200.0)
-            noiseL = tsL.crop(gps - noise_pad - 400.0, gps - noise_pad - 200.0)
+            noise_start, noise_end = gps - noise_pad - 400.0, gps - noise_pad - 200.0
+
+        noiseH = tsH.crop(noise_start, noise_end)
+        noiseL = tsL.crop(noise_start, noise_end)
+
     except Exception:
         noiseH = tsH.crop(gps - 1000.0, gps - 800.0)
         noiseL = tsL.crop(gps - 1000.0, gps - 800.0)
 
+    # -------------------------------------------------------
+    # 2) PSD
+    # -------------------------------------------------------
     fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
     fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
     if not np.allclose(fH, fL):
         S2 = np.interp(fH, fL, S2)
     f_psd = fH
 
-    # Signal principal - utiliser une fenêtre plus large pour l'estimation du délai
-    half_delay = 0.5  # 0.5 seconde pour une meilleure estimation du délai
-    hH_delay = safe_bandpass(np.asarray(tsH.crop(gps - half_delay, gps + half_delay).value, float), fs, flow, fhigh)
-    hL_delay = safe_bandpass(np.asarray(tsL.crop(gps - half_delay, gps + half_delay).value, float), fs, flow, fhigh)
+    # -------------------------------------------------------
+    # 3) DÉLAI initial
+    # -------------------------------------------------------
+    segH_delay = tsH.crop(gps - 0.5, gps + 0.5)
+    segL_delay = tsL.crop(gps - 0.5, gps + 0.5)
+    hH_delay = safe_bandpass(np.asarray(segH_delay.value, float), fs, flow, fhigh)
+    hL_delay = safe_bandpass(np.asarray(segL_delay.value, float), fs, flow, fhigh)
 
-    # Estimer le délai avec les signaux plus longs
     tau_guess = estimate_delay(hH_delay, hL_delay, fs)
-    
-    # Maintenant utiliser la fenêtre signal_win pour l'analyse d'énergie
-    half = 0.5 * signal_win
-    hH = safe_bandpass(np.asarray(tsH.crop(gps - half, gps + half).value, float), fs, flow, fhigh)
-    hL = safe_bandpass(np.asarray(tsL.crop(gps - half, gps + half).value, float), fs, flow, fhigh)
 
-    # Calibration RMS - utilisation de H_STAR comme référence d'amplitude
-    wHc = tsH.crop(gps - 1.0, gps + 1.0)
-    wLc = tsL.crop(gps - 1.0, gps + 1.0)
-    hHc = safe_bandpass(np.asarray(wHc.value, float), fs, flow, fhigh)
-    hLc = safe_bandpass(np.asarray(wLc.value, float), fs, flow, fhigh)
-    h_rms_obs = 0.5 * (np.sqrt(np.mean(hHc ** 2)) + np.sqrt(np.mean(hLc ** 2)))
+    # >>> ajout indispensable <<<
+    tau_guess_initial = float(tau_guess)
+
+    # -------------------------------------------------------
+    # 4) SIGNAL fenêtré
+    # -------------------------------------------------------
+    half = signal_win * 0.5
+    segH = tsH.crop(gps - half, gps + half)
+    segL = tsL.crop(gps - half, gps + half)
+
+    hH = safe_bandpass(np.asarray(segH.value, float), fs, flow, fhigh)
+    hL = safe_bandpass(np.asarray(segL.value, float), fs, flow, fhigh)
+
+    # -------------------------------------------------------
+    # 5) RMS dynamique
+    # -------------------------------------------------------
+    winH = tsH.crop(gps - rms_win, gps + rms_win)
+    winL = tsL.crop(gps - rms_win, gps + rms_win)
+
+    hHc = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
+    hLc = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
+
+    rmsH = np.sqrt(np.mean(hHc ** 2))
+    rmsL = np.sqrt(np.mean(hLc ** 2))
+    h_rms_obs = 0.5 * (rmsH + rmsL)
     snr_like = h_rms_obs / np.sqrt(np.median(S1))
-    
-    # Calibration uniquement basée sur H_STAR (pas de dépendance distance ici)
+
+    # -------------------------------------------------------
+    # 6) BOOST logarithmique du SNR
+    # -------------------------------------------------------
     scale = H_STAR / max(h_rms_obs, 1e-30)
     if snr_like < 3:
-        scale *= 3 / max(snr_like, 1e-6)
-    print(f"[calib appliquée] RMS crête: {h_rms_obs:.3e} → scale={scale:.3e}")
+        boost = np.log1p(3.0 / max(snr_like, 1e-6))
+        scale *= boost
+        print(f"[boost logarithmique] snr_like={snr_like:.2f} → boost={boost:.3f}")
+
+    print(f"[calib amplitude] RMS={h_rms_obs:.3e} → scale={scale:.3e}")
     hH *= scale
     hL *= scale
 
-    # Spectre d'énergie cohérent avec correction de distance
+    # -------------------------------------------------------
+    # 7) SPECTRE (FFT)
+    # -------------------------------------------------------
     N = min(len(hH), len(hL))
     dt = 1.0 / fs
     T = N * dt
     w = tukey(N, 0.2)
     Uwin = (w ** 2).sum()
+
     H1 = np.fft.rfft(hH * w)
     H2 = np.fft.rfft(hL * w)
     f_short = np.fft.rfftfreq(N, d=dt)
@@ -235,21 +274,101 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     def energy_with_tau(tau):
         return compute_energy(H1, H2, f_short, tau, fs, Uwin, distance_mpc, flow, fhigh)
 
+    # -------------------------------------------------------
+    # 8) OPTIMISATION FINE DE TAU (±2 ms)
+    # -------------------------------------------------------
+    scan = np.linspace(tau_guess - tau_scan_width,
+                       tau_guess + tau_scan_width,
+                       tau_scan_steps)
+
+    best_tau = tau_guess
+    best_E = -np.inf
+
+    for tau in scan:
+        E_test, _, _ = energy_with_tau(tau)
+        if E_test > best_E and np.isfinite(E_test):
+            best_E = E_test
+            best_tau = tau
+
+    tau_guess = best_tau
     E_pos, f_use, dEdf_use = energy_with_tau(tau_guess)
+
     if not np.isfinite(E_pos) or E_pos <= 0:
-        print("[!] Énergie non significative, saut de l'événement.")
+        print("[!] Énergie non valide — abandon.")
         return {"E_total": 0.0, "m_sun": 0.0, "nu_eff": 0.0}
 
-    # Calibration énergétique globale (optionnelle)
+    # -------------------------------------------------------
+    # 9) GAIN GLOBAL
+    # -------------------------------------------------------
     try:
         with open("results/global_gain.json", "r") as fg:
             gglob = float(json.load(fg).get("g", 1.0))
             if np.isfinite(gglob) and gglob > 0:
                 dEdf_use *= gglob
                 E_pos *= gglob
-                print(f"[calib énergie] Gain global appliqué: g={gglob:.3e} → E={E_pos:.3e} J")
+                print(f"[gain global] g={gglob:.3e} → E={E_pos:.3e} J")
     except Exception:
         pass
+
+    # -------------------------------------------------------
+    # 10) EXPORT
+    # -------------------------------------------------------
+    E = E_pos
+    m_sun = E / (M_sun * c ** 2)
+    nu_eff = float(np.trapz(f_use * dEdf_use) / max(np.trapz(dEdf_use), 1e-30))
+
+    # -------------------------------------------------------
+    # 10) Sauvegarde du spectre — version corrigée et complète
+    # -------------------------------------------------------
+
+    E = float(E_pos)
+    m_sun = E / (M_sun * c**2)
+
+    # fréquence effective pondérée correctement
+    denom = max(np.trapz(dEdf_use), 1e-30)
+    nu_eff = float(np.trapz(f_use * dEdf_use) / denom)
+
+    os.makedirs("results", exist_ok=True)
+
+    out_json = {
+        "event": event_name,
+        "distance_mpc": float(distance_mpc),
+
+        # spectre complet
+        "freq_Hz": f_use.tolist(),
+        "dEdf_J_Hz": dEdf_use.tolist(),
+
+        # énergie
+        "E_total_J": E,
+        "m_sun": m_sun,
+
+        # info spectrale
+        "nu_eff_Hz": nu_eff,
+
+        # géométrie temporelle
+        "tau_s": float(tau_guess),          # tau optimisé final
+        "tau_initial_s": float(tau_guess_initial),   # nouveau champ utile
+        "flow_Hz": float(flow),
+        "fhigh_Hz": float(fhigh),
+
+        # calibrations (diagnostic)
+        "h_star": float(H_STAR),
+        "scale_applied": float(scale),
+        "snr_like": float(snr_like),
+        "global_gain": float(gglob if 'gglob' in locals() else 1.0)
+    }
+
+    with open(f"results/{event_name}.json", "w") as fj:
+        json.dump(out_json, fj, indent=2)
+
+    print(f"\n=== ANALYSE SPECTRALE {event_name} ===")
+    print(f"Distance: {distance_mpc} Mpc")
+    print(f"Énergie intrinsèque: {E:.3e} J ({m_sun:.3f} M☉)")
+    print(f"Fréquence effective: {nu_eff:.1f} Hz")
+    print(f"Référence d'amplitude: h★={H_STAR:.2e}")
+    print(f"τ optimisé: {tau_guess:.6f} s")
+
+    return {"E_total": E, "m_sun": m_sun, "nu_eff": nu_eff, "distance_mpc": distance_mpc}
 
     # Sauvegarde du spectre
     E = E_pos
