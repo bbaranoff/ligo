@@ -68,6 +68,5 @@ plt.ylabel(r"$dE/df\,/\,E_{tot}$ (1/Hz)")
 plt.title(f"Spectres d'énergie normalisés - {plotted} événements")
 plt.tight_layout()
 plt.savefig("plots/all_spectra_simple.png", dpi=200, bbox_inches='tight')
-plt.show()
 
 print(f"✅ {plotted} spectres tracés")
