@@ -17,19 +17,19 @@ plt.rcParams.update({
 def load_spec(path):
     with open(path, "r") as f:
         d = json.load(f)
-    if "f" in d and "dEdf" in d:
-        return np.array(d["f"], float), np.array(d["dEdf"], float)
+    if "freq_Hz" in d and "dEdf_J_Hz" in d:
+        return np.array(d["freq_Hz"], float), np.array(d["dEdf_J_Hz"], float)
     return None, None
 """
 def load_spec(path):
     with open(path, "r") as f:
         d = json.load(f)
 
-    if "f" not in d or "dEdf" not in d:
+    if "freq_Hz" not in d or "dEdf_J_Hz" not in d:
         return None, None
 
-    f = np.array(d["f"], float)
-    dEdf = np.array(d["dEdf"], float)
+    f = np.array(d["freq_Hz"], float)
+    dEdf = np.array(d["dEdf_J_Hz"], float)
 
     # --- normalisation par énergie totale ---
     E_total = np.trapezoid(dEdf, f)
