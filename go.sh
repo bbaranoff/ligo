@@ -10,6 +10,7 @@ source .env/bin/activate
 
 # 3. installer
 pip install scipy gwosc numpy matplotlib gwpy
+# ou pip install -r requirements.txt
 
 # 4. lancer pipeline
 bash run_all.sh
