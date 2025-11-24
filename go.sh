@@ -1,7 +1,16 @@
 #!/bin/bash
-sudo apt install python3-venv
-python3 -m venv .env
+
+# 1. créer l’environnement seulement si absent
+if [ ! -d ".env" ]; then
+    python3 -m venv .env
+fi
+
+# 2. ACTIVER l'env
 source .env/bin/activate
+
+# 3. installer
 pip install -r requirements.txt
+
+# 4. lancer pipeline
 bash run_all.sh
 python plot_all_spectra.py
