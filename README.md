@@ -1,8 +1,3 @@
-Voici un modèle de **README.md** pour ton dépôt `ligo` chez LIGO – je l’ai structuré pour être clair, informatif, et facile à adapter selon tes besoins.
-
----
-
-````markdown
 # ligo  
 Testing LIGO research in Python  
   
