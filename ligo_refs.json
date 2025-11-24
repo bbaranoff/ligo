@@ -25,7 +25,7 @@
     "tau": -0.004,
     "msun_c2": 0.9,
     "energy_J": 1.6e47,
-    "notes": "Plus petite masse de trou noir stellaire, énergie corrigée"
+    "notes": "Plus petite masse de trou noir stellaire, énergie corrigée (SNR bas : beaucoup de bruit)"
   },
   "GW170729": {
     "nu_eff": 130.0,
