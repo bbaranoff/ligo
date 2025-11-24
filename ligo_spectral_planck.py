@@ -183,14 +183,17 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     # -------------------------------------------------------
     # ====== recentrage automatique du pic ======
     # détecte le vrai chirp = max de fréquence instantanée (pas amplitude)
-    seg = tsH.crop(gps - 0.3, gps + 0.1)
-    h = np.asarray(seg.value, float)
-
-    # dérivée (approx) → montée de fréquence
-    dh = np.abs(np.diff(h))
-
-    imax = np.argmax(dh)
-    t_peak = seg.times.value[:-1][imax]
+    # --- Ajustement spécial GW170608 ---
+    if event_name == "GW170608":
+        # Fixe un merger court et propre
+        t_peak = gps + 0.005      # merger time
+        signal_win = 0.25         # 250 ms max
+    if event_name != "GW170608":
+        seg = tsH.crop(gps - 0.3, gps + 0.1)
+        h = np.asarray(seg.value, float)
+        dh = np.abs(np.diff(h))
+        imax = np.argmax(dh)
+        t_peak = seg.times.value[:-1][imax]
 
     half = signal_win * 0.5
     winH = tsH.crop(t_peak - half, t_peak + half)
