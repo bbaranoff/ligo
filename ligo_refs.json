@@ -1,0 +1,142 @@
+{
+  "GW150914": {
+    "nu_eff": 150.0,
+    "tau": -0.0069,
+    "msun_c2": 3.0,
+    "energy_J": 5.3e47,
+    "notes": "Premier signal d'ondes gravitationnelles détecté"
+  },
+  "GW151226": {
+    "nu_eff": 445.0,
+    "tau": -0.0027,
+    "msun_c2": 1.0,
+    "energy_J": 1.8e47,
+    "notes": "Énergie corrigée"
+  },
+  "GW170104": {
+    "nu_eff": 110.0,
+    "tau": -0.003,
+    "msun_c2": 2.0,
+    "energy_J": 3.5e47,
+    "notes": "Masse et énergie ajustées"
+  },
+  "GW170608": {
+    "nu_eff": 30.0,
+    "tau": -0.004,
+    "msun_c2": 0.9,
+    "energy_J": 1.6e47,
+    "notes": "Plus petite masse de trou noir stellaire, énergie corrigée"
+  },
+  "GW170729": {
+    "nu_eff": 130.0,
+    "tau": -0.006,
+    "msun_c2": 4.8,
+    "energy_J": 8.5e47,
+    "notes": "Système le plus massif d'O2, énergie corrigée"
+  },
+  "GW170809": {
+    "nu_eff": 200.0,
+    "tau": -0.007,
+    "msun_c2": 2.7,
+    "energy_J": 4.8e47,
+    "notes": "Énergie corrigée"
+  },
+  "GW170814": {
+    "nu_eff": 170.0,
+    "tau": -0.006,
+    "msun_c2": 2.7,
+    "energy_J": 4.8e47,
+    "notes": "Détection à trois détecteurs (LIGO+Virgo)"
+  },
+  "GW170817": {
+    "nu_eff": 80.0,
+    "tau": 0.0,
+    "msun_c2": 0.025,
+    "energy_J": 4.4e46,
+    "notes": "Fusion d'étoiles à neutrons, avec contrepartie électromagnétique"
+  },
+  "GW190403_051519": {
+    "nu_eff": 180.0,
+    "tau": -0.006,
+    "msun_c2": 1.8,
+    "energy_J": 3.2e47,
+    "notes": "O3a"
+  },
+  "GW190412": {
+    "nu_eff": 150.0,
+    "tau": -0.006,
+    "msun_c2": 1.7,
+    "energy_J": 3.0e47,
+    "notes": "Rapport de masse asymétrique significatif"
+  },
+  "GW190413_052954": {
+    "nu_eff": 170.0,
+    "tau": -0.007,
+    "msun_c2": 1.3,
+    "energy_J": 2.3e47,
+    "notes": "O3a"
+  },
+  "GW190413_134308": {
+    "nu_eff": 175.0,
+    "tau": -0.007,
+    "msun_c2": 1.4,
+    "energy_J": 2.5e47,
+    "notes": "O3a"
+  },
+  "GW190421_213856": {
+    "nu_eff": 160.0,
+    "tau": -0.008,
+    "msun_c2": 1.6,
+    "energy_J": 2.8e47,
+    "notes": "O3a"
+  },
+  "GW190503_185404": {
+    "nu_eff": 200.0,
+    "tau": -0.007,
+    "msun_c2": 2.6,
+    "energy_J": 4.6e47,
+    "notes": "O3a"
+  },
+  "GW190514_065416": {
+    "nu_eff": 210.0,
+    "tau": -0.006,
+    "msun_c2": 2.2,
+    "energy_J": 3.9e47,
+    "notes": "O3a"
+  },
+  "GW190517_055101": {
+    "nu_eff": 195.0,
+    "tau": -0.007,
+    "msun_c2": 2.0,
+    "energy_J": 3.5e47,
+    "notes": "O3a"
+  },
+  "GW190519_153544": {
+    "nu_eff": 140.0,
+    "tau": -0.009,
+    "msun_c2": 2.1,
+    "energy_J": 3.7e47,
+    "notes": "O3a, énergie corrigée"
+  },
+  "GW190521": {
+    "nu_eff": 70.0,
+    "tau": -0.005,
+    "msun_c2": 7.0,
+    "energy_J": 1.2e48,
+    "notes": "Trous noirs de masse intermédiaire, masse finale ~142 Msun"
+  },
+  "GW190828_063405": {
+    "nu_eff": 180.0,
+    "tau": -0.008,
+    "msun_c2": 1.9,
+    "energy_J": 3.4e47,
+    "notes": "O3b"
+  },
+  "GW190828_065509": {
+    "nu_eff": 190.0,
+    "tau": -0.008,
+    "msun_c2": 2.1,
+    "energy_J": 3.7e47,
+    "notes": "O3b"
+  }
+}
