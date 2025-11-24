@@ -17,35 +17,36 @@ Le dépôt est à usage exploratoire/recherche : il n’est pas (encore) une bib
 ## 🧪 Installation  
 1. Cloner le dépôt :  
    ```bash
-   git clone https://github.com/bbaranoff/ligo.git
-   cd ligo
+   git clone https://github.com/bbaranoff/ligo.git && cd ligo
 ````
 
 2. Exécuter le script d’installation/initialisation :
 
-   ```bash
-   source go.sh
-   ```
+```bash
+source go.sh
+```
 
-   ou, si tu préfères installer manuellement :
+ou, si tu préfères installer manuellement :
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+```bash
+
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
 3. Lancer le script principal ou tous les scripts :
 
-   ```bash
-   ./run_all.sh
-   ```
+```bash
+./run_all.sh
+```
 
-   ou
+ou
 
-   ```bash
-   python ligo_spectral_planck.py
-   python plot_all_spectra.py
-   ```
+```bash
+python ligo_spectral_planck.py
+python plot_all_spectra.py
+```
 
 ## 🔍 Utilisation
 
