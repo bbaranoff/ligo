@@ -4,6 +4,17 @@ set -e
 # --------------------------------------------
 #   RUN GLOBAL – Nouveau Pipeline Spectral τ
 # --------------------------------------------
+# ============================================================
+# TIME DELAYS H↔L (ms) — signe = H - L
+# ============================================================
+declare -A TAU_HL_MS=(
+    [GW150914]=6.9      # L1 first, H1 6.9 ms later
+    [GW151226]=1.1      # L1 first, H1 1.1 ms later
+    [GW170104]=-3.0     # H1 first, L1 3.0 ms later
+    [GW170608]=-7.0     # H1 first, L1 7.0 ms later
+    [GW170814]=8.0      # L1 8 ms before H1  (et 14 ms avant Virgo)
+    [GW170817]=2.62     # L1 first, H1 2.62 ms later (valeur d'analyse externe)
+)
 
 EVENTS=(
   GW150914
@@ -62,16 +73,22 @@ echo -e "Event                 |   ν_eff[Hz] |     τ[s]   |   m_sun   |  Energ
 echo "--------------------------------------------------------------------------"
 
 for EV in "${EVENTS[@]}"; do
-    python3 ligo_spectral_planck.py --event "$EV" --distance-mpc "${DIST[$EV]}" > ligo.log
+    python3 ligo_spectral_planck.py --event "$EV" --distance "${DIST[$EV]}" > logs.txt
     # Récupération immédiate du JSON
     JSON="results/${EV}.json"
+
     if [[ -f "$JSON" ]]; then
-        nu=$(jq -r '.nu_eff_Hz' "$JSON")
-        tau=$(jq -r '.tau_s' "$JSON")
-        m=$(jq -r '.m_sun' "$JSON")
-        e=$(jq -r '.E_total_J' "$JSON")
+
+        # Extraction robuste : null -> 0
+        nu=$(jq -r '.nu_eff // 0' "$JSON")
+        tau=$(jq -r '.tau // 0' "$JSON")
+        m=$(jq -r '.M_sun // 0' "$JSON")
+        e=$(jq -r '.E_total // 0' "$JSON")
+
+        # Impression formatée
         LC_NUMERIC=C printf "%-20s | %10.1f | %10.5f | %9.3f | %12.3e\n" \
             "$EV" "$nu" "$tau" "$m" "$e"
+
     else
         echo "❌ Impossible de lire $JSON"
     fi

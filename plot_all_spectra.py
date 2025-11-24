@@ -13,13 +13,32 @@ plt.rcParams.update({
     "grid.alpha": 0.3,
     "font.size": 12
 })
-
+"""
 def load_spec(path):
     with open(path, "r") as f:
         d = json.load(f)
-    if "freq_Hz" in d and "dEdf_J_Hz" in d:
-        return np.array(d["freq_Hz"], float), np.array(d["dEdf_J_Hz"], float)
+    if "f" in d and "dEdf" in d:
+        return np.array(d["f"], float), np.array(d["dEdf"], float)
     return None, None
+"""
+def load_spec(path):
+    with open(path, "r") as f:
+        d = json.load(f)
+
+    if "f" not in d or "dEdf" not in d:
+        return None, None
+
+    f = np.array(d["f"], float)
+    dEdf = np.array(d["dEdf"], float)
+
+    # --- normalisation par énergie totale ---
+    E_total = np.trapz(dEdf, f)
+    if E_total == 0 or np.isnan(E_total):
+        return f, dEdf * 0  # cas degueu / vide
+
+    dEdf_norm = dEdf / E_total
+
+    return f, dEdf_norm
 
 files = sorted(glob.glob(os.path.join("results", "*.json")))
 if not files:
