@@ -14,3 +14,4 @@ pip install -r requirements.txt
 # 4. lancer pipeline
 bash run_all.sh
 python plot_all_spectra.py
+xdg-open plots/all_spectra_simple.png
