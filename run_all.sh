@@ -1,19 +1,35 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
-# --------------------------------------------
-#   RUN GLOBAL – Nouveau Pipeline Spectral τ
-# --------------------------------------------
-# ============================================================
-# TIME DELAYS H↔L (ms) — signe = H - L
-# ============================================================
-declare -A TAU_HL_MS=(
-    [GW150914]=6.9      # L1 first, H1 6.9 ms later
-    [GW151226]=1.1      # L1 first, H1 1.1 ms later
-    [GW170104]=-3.0     # H1 first, L1 3.0 ms later
-    [GW170608]=-7.0     # H1 first, L1 7.0 ms later
-    [GW170814]=8.0      # L1 8 ms before H1  (et 14 ms avant Virgo)
-    [GW170817]=2.62     # L1 first, H1 2.62 ms later (valeur d'analyse externe)
+# ================================
+#   CONFIG PIPELINE SPECTRAL
+# ================================
+PY=python3
+SCRIPT="ligo_spectral_planck.py"
+
+# Distances Mpc officielles (GWOSC)
+declare -A DIST=(
+  [GW150914]=410
+  [GW151226]=440
+  [GW170104]=880
+  [GW170608]=320
+  [GW170729]=2840
+  [GW170809]=990
+  [GW170814]=540
+  [GW170817]=40
+  
+  [GW190403_051519]=1230
+  [GW190412]=740
+  [GW190413_052954]=1200
+  [GW190413_134308]=1500
+  [GW190421_213856]=1130
+  [GW190503_185404]=2100
+  [GW190514_065416]=1480
+  [GW190517_055101]=1800
+  [GW190519_153544]=2540
+  [GW190521]=5300
+  [GW190828_063405]=720
+  [GW190828_065509]=891
 )
 
 EVENTS=(
@@ -39,60 +55,40 @@ EVENTS=(
   GW190828_065509
 )
 
-# Distances (les vraies, en Mpc)
-declare -A DIST
-DIST[GW150914]=410
-DIST[GW151226]=440
-DIST[GW170104]=880
-DIST[GW170608]=320
-DIST[GW170729]=2750
-DIST[GW170809]=990
-DIST[GW170814]=540
-DIST[GW170817]=40
-DIST[GW190403_051519]=900
-DIST[GW190412]=740
-DIST[GW190413_052954]=700
-DIST[GW190413_134308]=700
-DIST[GW190421_213856]=1500
-DIST[GW190503_185404]=1890
-DIST[GW190514_065416]=1500
-DIST[GW190517_055101]=1400
-DIST[GW190519_153544]=1500
-DIST[GW190521]=5300
-DIST[GW190828_063405]=900
-DIST[GW190828_065509]=900
-
+# ================================
+#   RUN GLOBAL
+# ================================
 echo ""
 echo "============================================================="
 echo "      🌌  RUN GLOBAL – Nouveau Pipeline Spectral τ "
 echo "============================================================="
-
 echo ""
-echo "====================== SYNTHÈSE PROGRESSIVE ======================"
-echo -e "Event                 |   ν_eff[Hz] |     τ[s]   |   m_sun   |  Energie[J]"
-echo "--------------------------------------------------------------------------"
+
+printf "====================== SYNTHÈSE PROGRESSIVE ======================\n"
+printf "Event                 |   ν_eff[Hz] |     τ[s]   |   m_sun   |  Energie[J]\n"
+echo   "============================================================="
 
 for EV in "${EVENTS[@]}"; do
-    python3 ligo_spectral_planck.py --event "$EV" --distance "${DIST[$EV]}" > logs.txt
-    # Récupération immédiate du JSON
-    JSON="results/${EV}.json"
+    D=${DIST[$EV]:-500}   # fallback sécurité
 
-    if [[ -f "$JSON" ]]; then
-
-        # Extraction robuste : null -> 0
-        nu=$(jq -r '.nu_eff // 0' "$JSON")
-        tau=$(jq -r '.tau // 0' "$JSON")
-        m=$(jq -r '.M_sun // 0' "$JSON")
-        e=$(jq -r '.E_total // 0' "$JSON")
-
-        # Impression formatée
-        LC_NUMERIC=C printf "%-20s | %10.1f | %10.5f | %9.3f | %12.3e\n" \
-            "$EV" "$nu" "$tau" "$m" "$e"
-
-    else
-        echo "❌ Impossible de lire $JSON"
+    OUT=$( $PY "$SCRIPT" --event "$EV" --distance-mpc "$D" 2>/dev/null )
+    
+    # Lecture du JSON généré
+    J="results/$EV.json"
+    if [[ ! -f "$J" ]]; then
+        printf "%-20s |   ERROR JSON MISSING\n" "$EV"
+        continue
     fi
+
+    # Extraction valeurs
+    nu=$(jq '.nu_eff_Hz' "$J")
+    tau=$(jq '.tau_s' "$J")
+    m=$(jq '.m_sun' "$J")
+    E=$(jq '.E_total_J' "$J")
+
+    LC_NUMERIC=C printf "%-20s | %10.1f | %10.5f | %9.3f | %12.3E\n" \
+            "$EV" "$nu" "$tau" "$m" "$E"
 done
 
 echo ""
-echo "🎯 Pipeline terminé."
+echo "🎯 FIN PIPELINE"

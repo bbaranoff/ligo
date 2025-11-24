@@ -1,711 +1,242 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LIGO Spectral Unified Pipeline – Version Professionnelle
---------------------------------------------------------
-Pipeline spectral basé sur :
-  - τ géométrique (cross-corr)
-  - τ_phase (phase log-spectrale)
-  - fusion tau_final bornée ±0.02 s
-  - deux modèles énergétiques : "toi" ou "gr"
-  - export JSON propre, stable et lisible
+Analyse cohérente LIGO H1–L1 (GWOSC)
+------------------------------------
+- Calibration h★ fixe (=1) avec renfort pseudo-SNR.
+- Fenêtre de bruit sécurisée.
+- Lissage log-log du spectre d'énergie.
+- Énergie effective normalisée (indépendante de la distance après correction).
 """
 
-import os
-import json
+from scipy.signal.windows import dpss
+import argparse, os, json
 import numpy as np
-from scipy.signal import butter, filtfilt, welch, hilbert
-from scipy.interpolate import interp1d
-from gwpy.timeseries import TimeSeries
-import argparse
+import matplotlib.pyplot as plt
+from scipy.signal import butter, sosfiltfilt
+from scipy.signal.windows import tukey
+from scipy.ndimage import gaussian_filter1d
 from gwosc import datasets
-# ============================================================
-# CONST. PHYSIQUES
-# ============================================================
+from gwpy.timeseries import TimeSeries
 
-c = 299792458.0            # vitesse de la lumière
-G = 6.67430e-11            # constante gravitationnelle
-M_sun = 1.98847e30         # masse solaire
-
-# ============================================================
-# PARAMS GLOBAUX
-# ============================================================
-
-H_STAR = 1.0  # ton modèle h★ = 1 normalisé, on conserve
-TAU_LIMIT = 0.02  # borne de sécurité sur tau_final
-
-# modèle "toi" (énergie unifiée)
-ENERGY_SCALE_TOI = 1e-35  # ton ancienne constante (conservée)
-
-# modèle GR : dE/df = (pi^2 c^3 / G) * r^2 * f^2 |h|^2
-ENERGY_SCALE_GR = (np.pi**2) * (c**3 / G)
-
-# Fenêtres par défaut
-DEFAULT_FLOW = 20.0
-DEFAULT_FHIGH = 350.0
-
-# chemins
-RESULTS_DIR = "results"
-os.makedirs(RESULTS_DIR, exist_ok=True)
-
-
-# ============================================================
-# PARAMÈTRES PAR DÉFAUT DES ÉVÉNEMENTS LIGO
-# ============================================================
+# ==========================
+# Constantes physiques
+# ==========================
+c = 299792458.0
+M_sun = 1.98847e30
+Mpc = 3.085677581491367e22
+H_STAR = 1e6  # amplitude RMS cible
+SCALE_EJ = 0.87e29
 EVENT_PARAMS = {
-    "default": {
-        "flow": 20.0,
-        "fhigh": 1024.0,
-        "signal_win": 0.25,
-        "noise_pad": 5.0,
-        "distance_mpc": 500.0
-    }
+    "default":  {"flow": 20.0, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200.0},
 }
-# ============================================================
-# 2) HELPER : BUTTERWORTH BANDPASS
-# ============================================================
 
-def butter_bandpass(lowcut, highcut, fs, order=4):
-    nyq = 0.5 * fs
-    low = max(lowcut / nyq, 1e-6)
-    high = min(highcut / nyq, 0.999999)
-    b, a = butter(order, [low, high], btype="band")
-    return b, a
-
-
-def safe_bandpass(x, fs, lowcut, highcut, order=4):
-    if len(x) < 20:
-        return x
-    b, a = butter_bandpass(lowcut, highcut, fs, order)
-    return filtfilt(b, a, x).astype(float)
-
-
-# ============================================================
-# 3) HELPER : PSD Welch propre et stable
-# ============================================================
-
-def psd_welch(ts, fmin=20.0, fmax=350.0):
-    """
-    ts : array-like
-    renvoie f, S(f) sur [fmin, fmax]
-    """
-    x = np.asarray(ts, float)
-    if len(x) < 32:
-        return np.array([fmin, fmax], float), np.array([1e-30, 1e-30], float)
-
-    fs = 1.0 / (ts.sample_spacing.value if hasattr(ts, "sample_spacing") else 1.0)
-    f, Pxx = welch(x, fs=fs, nperseg=4096)
-
-    # Sélection domaine utile
-    mask = (f >= fmin) & (f <= fmax)
-    if not np.any(mask):
-        return np.array([fmin, fmax]), np.array([1e-30, 1e-30])
-    return f[mask], Pxx[mask]
-
-
-# ============================================================
-# 4) HELPER : estimation du délai géométrique (cross-corr)
-# ============================================================
-def estimate_delay(h1, h2, fs, max_shift=0.01):
-    """
-    Délai spectral basé sur la phase :
-    τ = - dφ/dω
-    Signature et retour IDENTIQUES à la version temporelle.
-    h1, h2 : signaux temporels
-    fs : fréquence d'échantillonnage
-    max_shift : borne de sécurité (secondes)
-    """
-
-    # ----------------------------------------------------------
-    # 1) Mise à longueur commune
-    # ----------------------------------------------------------
-    n = min(len(h1), len(h2))
-    h1 = h1[:n]
-    h2 = h2[:n]
-
-    # ----------------------------------------------------------
-    # 2) Passage en fréquentiel
-    # ----------------------------------------------------------
-    H1 = np.fft.rfft(h1)
-    H2 = np.fft.rfft(h2)
-    freq = np.fft.rfftfreq(n, 1/fs)
-
-    # ----------------------------------------------------------
-    # 3) Coherence spectral-domain (cross-spectrum)
-    # ----------------------------------------------------------
-    # produit conjugué → phase relative
-    HP = H1 * np.conj(H2)
-
-    amp = np.abs(HP)
-    if np.nanmax(amp) == 0:
-        return 0.0
-
-    # ----------------------------------------------------------
-    # 4) Sélection des zones significatives
-    # ----------------------------------------------------------
-    thresh = 0.05 * np.nanmax(amp)
-    mask = amp > thresh
-
-    f = freq[mask]
-    hp = HP[mask]
-
-    if len(f) < 10:
-        return 0.0
-
-    # ----------------------------------------------------------
-    # 5) Phase unwrap
-    # ----------------------------------------------------------
-    phi = np.unwrap(np.angle(hp))
-
-    # ----------------------------------------------------------
-    # 6) Dérivée lissée
-    # ----------------------------------------------------------
-    dphi = np.gradient(phi, f)
-    dphi = np.convolve(dphi, np.ones(7)/7, mode="same")
-
-    # ----------------------------------------------------------
-    # 7) Tau spectral :  - dφ/dω  = - dφ/(2πf)
-    # ----------------------------------------------------------
-    tau = - dphi / (2 * np.pi)
-
-    # ----------------------------------------------------------
-    # 8) Trim robuste (10% - 90%)
-    # ----------------------------------------------------------
-    q1 = np.percentile(tau, 10)
-    q2 = np.percentile(tau, 90)
-    tau_clip = tau[(tau > q1) & (tau < q2)]
-
-    if len(tau_clip) == 0:
-        tau_est = float(np.nanmedian(tau))
-    else:
-        tau_est = float(np.nanmedian(tau_clip))
-
-    # ----------------------------------------------------------
-    # 9) Clip final identique à la version d'origine
-    # ----------------------------------------------------------
-    tau_est = float(np.clip(tau_est, -max_shift, max_shift))
-
-    # ----------------------------------------------------------
-    # 10) Retour identique
-    # ----------------------------------------------------------
-    return tau_est
-
-
-# ============================================================
-# 5) HELPER : Fetch TimeSeries LIGO propre
-# ============================================================
-
-def fetch(det, t0, t1, outdir="data"):
-    """
-    Télécharge les données publiques LIGO Open Data pour un détecteur.
-    Renvoie un TimeSeries (gwpy).
-    """
+# ==========================
+# Utilitaires
+# ==========================
+def fetch(det, t0, t1, outdir="data") -> TimeSeries:
     os.makedirs(outdir, exist_ok=True)
     return TimeSeries.fetch_open_data(det, t0, t1, cache=True)
-# ============================================================
-# 6) HELPER : FFT + h_phys(f)
-# ============================================================
 
-def compute_fft(ts, fs):
-    """
-    ts : array flottant (signal filtré)
-    fs : fréquence d'échantillonnage
-    Renvoie (f_pos, H_pos) = FFT demi-raie, centrée, unilatérale.
-    """
-    n = len(ts)
-    if n < 32:
-        return np.array([1.0]), np.array([1e-30])
+def safe_bandpass(x, fs, f1, f2, order=4):
+    nyq = 0.5 * fs
+    f2_safe = min(f2, 0.95 * nyq)
+    if f2_safe <= f1:
+        raise ValueError(f"Bandpass impossible: f1={f1} ≥ f2_safe={f2_safe}")
+    sos = butter(order, [f1, f2_safe], btype="bandpass", fs=fs, output="sos")
+    return sosfiltfilt(sos, x)   # <<< SUPPRESSION DU FENÊTRAGE
 
-    H = np.fft.rfft(ts)
-    f = np.fft.rfftfreq(n, 1.0 / fs)
+def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
+    from numpy.fft import rfft, rfftfreq
+    x = np.asarray(ts.value, float)
+    fs = ts.sample_rate.value
+    fmax = min(fmax, 0.95 * (0.5 * fs))
+    nseg = int(seglen * fs)
+    nhop = int((seglen - overlap) * fs)
+    win = np.hanning(nseg)
+    U = (win ** 2).sum()
+    specs = []
+    for i in range(0, x.size - nseg + 1, nhop):
+        seg = safe_bandpass(x[i:i + nseg], fs, fmin, fmax)
+        Xk = rfft(seg * win)
+        Pxx = (2.0 / (fs * U)) * np.abs(Xk) ** 2
+        specs.append(Pxx)
+    S = np.median(np.stack(specs), axis=0)
+    f = rfftfreq(nseg, d=1.0 / fs)
+    return f, S
 
-    # éviter les zéros fantômes
-    H = np.asarray(H, complex)
-    return f, H
+def estimate_delay_time(h1, h2, fs, max_delay_ms=10.0):
+    N = min(len(h1), len(h2))
+    w = np.ones(N)  # pas de fenêtre temporelle
+    X = np.fft.rfft(h1[:N] * w, n=2*N)
+    Y = np.fft.rfft(h2[:N] * w, n=2*N)
+    R = Y * np.conj(X)
+    r = np.fft.irfft(R)
+    r = np.fft.fftshift(r)
 
+    lags = np.arange(-N, N) / fs
+    lim = max_delay_ms / 1000
+    mask = np.abs(lags) <= lim
+    r_mask = r[mask]; l_mask = lags[mask]
 
-def compute_h_phys(H, S):
-    """
-    H : FFT du signal
-    S : PSD (interpolée sur mêmes freq)
-    Retourne le h_phys = H / sqrt(S)
-    """
-    S_safe = np.maximum(S, 1e-30)
-    return H / np.sqrt(S_safe)
-# ============================================================
-# 7) SPECTRE D'ÉNERGIE (TOI ou GR)
-# ============================================================
-
-def compute_energy_spectrum(f, h_phys, distance_mpc, model="toi"):
-    """
-    f : fréquences positives
-    h_phys : amplitude physique
-    distance_mpc : distance événement (Mpc)
-    model : "toi" | "gr"
-    Renvoie : dE/df (J/Hz), E_total (J)
-    """
-
-    # Conversion distance Mpc → mètres
-    r = float(distance_mpc) * (3.085677581e22)
-
-    # amplitude quadratique
-    amp2 = np.abs(h_phys)**2
-
-    if model == "gr":
-        # dE/df from GR : (pi^2 c^3 / G) r^2 f^2 |h|^2
-        scale = ENERGY_SCALE_GR
-    else:
-        # modèle unifié (toi)
-        scale = ENERGY_SCALE_TOI
-
-
-    # suppression éventuelle des singularités
-    dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # énergie totale (intégrale)
-    E_total = float(np.trapezoid(dEdf, f))
-
-    return dEdf, E_total
-# ============================================================
-# 8) SPECTRE COHÉRENT h★ — dE/df
-# ============================================================
-
-def coherent_spectrum(hH, hL, fs, f_psd, S1, S2, distance_mpc, model="toi"):
-    """
-    Calcule dE/df cohérent :
-        dE/df = |Hc(f)|^2 * scale * r^2 * f^2
-    Hc étant la combinaison cohérente pondérée par les PSD.
-    """
-
-    # ------------------------------------------------------------
-    # Fréquences FFT
-    # ------------------------------------------------------------
-    n = len(hH)
-    freq = np.fft.rfftfreq(n, 1.0/fs)
-
-    # FFT H1 / L1
-    HH = np.fft.rfft(hH)
-    LL = np.fft.rfft(hL)
-
-    # ------------------------------------------------------------
-    # PSD interpolées
-    # ------------------------------------------------------------
-    S1i = np.interp(freq, f_psd, S1)
-    S2i = np.interp(freq, f_psd, S2)
-
-    # ------------------------------------------------------------
-    # Combinaison cohérente
-    # ------------------------------------------------------------
-    W = 1.0 / (S1i + S2i + 1e-30)
-    Hc = (HH + LL) * W
-
-    # ------------------------------------------------------------
-    # Paramètres physiques
-    # ------------------------------------------------------------
-    r = float(distance_mpc) * 3.085677581e22   # Mpc → mètres
-
-    if model == "gr":
-        scale = ENERGY_SCALE_GR
-    else:
-        scale = ENERGY_SCALE_TOI
-
-    # ------------------------------------------------------------
-    # Formule complète
-    # dE/df = |Hc|^2 * scale * r^2 * f^2
-    # ------------------------------------------------------------
-    amp2 = np.abs(Hc)**2
-    dEdf = amp2 * scale * (r**2) * (freq**2)
-
-    # Nettoyage
-    dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Bande de fréquence utile
-    mask = (freq >= 10) & (freq <= 2000)
-
-    return freq[mask], dEdf[mask]
-
-# ============================================================
-# 8) EXTRACTION PHASE LOG-SPECTRALE (α, φ)
-# ============================================================
-
-def extract_phase_logsin(f, dEdf, min_pts=40):
-    """
-    Tente d'extraire une phase log-sin :
-        dE/df = A(f) * sin(α log f + φ)
-    f : array fréquences (>0)
-    dEdf : array énergie spectrale (>=0)
-    Renvoie (alpha, phi)
-
-    Si extraction impossible -> (nan, nan)
-    """
-
-    # Nettoyage et domaine utile
-    mask = (f > 0) & (np.isfinite(dEdf)) & (dEdf > 0)
-    f2 = f[mask]
-    S = dEdf[mask]
-
-    if len(f2) < min_pts:
-        return np.nan, np.nan
-
-    # log-frequencies
-    x = np.log(f2)
-    y = S
-
-    # Normalisation douce
-    y = y / np.max(y)
-
-    # On cherche des oscillations en x (log f)
-    # FFT sur y(x)
-    Y = np.fft.rfft(y - np.mean(y))
-    k = np.fft.rfftfreq(len(y), d=(x[1] - x[0]))
-
-    # Trouver le pic (k>0)
-    if len(k) < 3:
-        return np.nan, np.nan
-
-    k_abs = np.abs(Y)
-    k_abs[0] = 0  # retire le DC
-
-    idx = np.argmax(k_abs)
-    k0 = k[idx]
-
-    if k0 <= 0:
-        return np.nan, np.nan
-
-    # alpha = 2π * k0
-    alpha = 2 * np.pi * k0
-
-    # pour phi, on approxime la phase du coefficient dominant
-    phi = np.angle(Y[idx])
-
-    return float(alpha), float(phi)
-
-
-# ============================================================
-# 9) FRÉQUENCE EFFECTIVE ν_eff (robuste)
-# ============================================================
-def compute_nu_eff(freq, dEdf):
-    # égalisation des tailles
-    L = min(len(freq), len(dEdf))
-    freq = freq[:L]
-    dEdf = dEdf[:L]
-
-    if dEdf.max() == 0:
-        return 0.0
-
-    # bande utile BBH
-    mask = (freq >= 30) & (freq <= 300)
-    f = freq[mask]
-    e = dEdf[mask]
-
-    # seuil anti-bruit
-    if len(e) == 0:
-        return 0.0
-
-    thresh = 0.01 * e.max()
-    keep = e > thresh
-
-    f = f[keep]
-    e = e[keep]
-
-    if len(f) < 5:
-        return 0.0
-
-    # lissage
-    e_s = np.convolve(e, np.ones(7)/7, mode="same")
-    E = np.trapezoid(e_s, f)
-
-    if E <= 0:
-        return 0.0
-
-    return float(np.trapezoid(f * e_s, f) / E)
-
-"""
-def compute_nu_eff(f, dEdf):
-
-    f = np.asarray(f, float)
-    S = np.asarray(dEdf, float)
-
-    S = np.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
-    den = np.trapezoid(S, f)
-
-    if den <= 0:
-        # fallback = max spectral
-        idx = int(np.argmax(S))
-        return float(f[idx])
-
-    num = np.trapezoid(f * S, f)
-    nu_eff = num / den
-
-    # si aberrant, fallback f_peak
-    if not np.isfinite(nu_eff) or nu_eff <= 0:
-        idx = int(np.argmax(S))
-        return float(f[idx])
-
-    return float(nu_eff)
-"""
-# ============================================================
-# 10) CALCUL DU TAU GÉOMÉTRIQUE
-# ============================================================
+    i = np.argmax(np.abs(r_mask))
+    return float(l_mask[i])
 
 def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
     """
-    Extrait un segment autour du GPS, applique bandpass,
-    puis corrélation croisée.
-    """
-    segH = tsH.crop(gps - 0.5, gps + 0.5)
-    segL = tsL.crop(gps - 0.5, gps + 0.5)
-
-    hH = safe_bandpass(np.asarray(segH.value, float), fs, flow, fhigh)
-    hL = safe_bandpass(np.asarray(segL.value, float), fs, flow, fhigh)
-
-    return estimate_delay(hH, hL, fs)
-
-
-# ============================================================
-# 11) FUSION TAU : τ_geo + τ_phase → τ_final
-# ============================================================
-
-def combine_tau(tau_geo, alpha_logsin, nu_eff,
-                w_geo=0.6, w_phase=0.4,
-                tau_min=-0.02, tau_max=0.02):
-    """
-    Combine :
-        τ_geo    = délai géométrique
-        τ_phase  = -α / ν_eff
-    avec pondération w_geo / w_phase et bornage.
+    τ géométrique robuste : max de corrélation sur la zone du chirp.
     """
 
-    # τ_phase
-    if np.isfinite(alpha_logsin) and np.isfinite(nu_eff) and nu_eff > 0:
-        tau_phase = - alpha_logsin / nu_eff
-    else:
-        tau_phase = 0.0
+    # --- 1) segment très court centré sur le merge (~40 ms) ---
+    segH = tsH.crop(gps - 0.03, gps + 0.01)
+    segL = tsL.crop(gps - 0.03, gps + 0.01)
 
-    # fusion
-    tau_final = w_geo * tau_geo + w_phase * tau_phase
+    hH_raw = np.asarray(segH.value, float)
+    hL_raw = np.asarray(segL.value, float)
 
-    # bornage final
-    tau_final = float(np.clip(tau_final, tau_min, tau_max))
+    # --- 2) version filtrée ---
+    hH_f = safe_bandpass(hH_raw, fs, flow, fhigh)
+    hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
 
-    return float(tau_final), float(tau_phase)
-# ============================================================
-# 12) CALCUL DE L'ÉNERGIE, MASSE, EXPORT JSON
-# ============================================================
+    # --- 3) cross-corr brute + filtrée ---
+    tau_raw = estimate_delay_time(hH_raw, hL_raw, fs)
+    tau_flt = estimate_delay_time(hH_f, hL_f, fs)
 
-def build_event_result(event_name,
-                       gps,              # ← ajouté ici
-                       nu_eff,
-                       tau_final,
-                       tau_geo,
-                       tau_phase,
-                       f_use,
-                       dEdf_use,
-                       E_total,
-                       model_energy="toi"):
+    # --- 4) combinaison robuste ---
+    tau = 0.7 * tau_flt + 0.3 * tau_raw
 
-    M_sun_J = M_sun * c**2
+    return float(tau)
 
-    result = {
-        "event": event_name,
-        "gps": float(gps),              # ← AJOUT ICI
-        "nu_eff": float(nu_eff),
-        "tau": float(tau_final),
-        "tau_geo": float(tau_geo),
-        "tau_phase": float(tau_phase),
-        "alpha_logsin": float(alpha_logsin),
-        "phi_logsin": float(phi_logsin),
-        "f": [float(x) for x in f_use],
-        "dEdf": [float(x) for x in dEdf_use],
-        "E_total": float(E_total),
-        "M_sun": float(E_total / M_sun_J),
-        "model_energy": model_energy
-    }
+# ==========================
+# ANALYSE SPECTRALE — VERSION CORRIGÉE
+# ==========================
+def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
+                              flow=20.0, fhigh=350.0, noise_pad=1200.0,
+                              signal_win=1.2, plot=False):
 
-    return result
-
-
-def export_json_result(event_name, result):
-    """
-    Sauvegarde propre dans results/<event>.json
-    """
-    os.makedirs("results", exist_ok=True)
-    out = os.path.join("results", f"{event_name}.json")
-
-    with open(out, "w") as f:
-        json.dump(result, f, indent=2)
-
-    print(f"📁 Résultat sauvegardé : {out}")
-# ============================================================
-# 13) PIPELINE COMPLET D'UN ÉVÉNEMENT
-# ============================================================
-
-def analyze_event(event_name,
-                  tsH,
-                  tsL,
-                  gps,
-                  distance_mpc,
-                  flow,
-                  fhigh,
-                  signal_win,
-                  noise_pad,
-                  model_energy="toi",
-                  plot=False):
-    """
-    Pipeline complet :
-    - PSD bruit
-    - Extraction spectrale
-    - nu_eff
-    - alpha_logsin / phi
-    - tau_geo
-    - tau_phase
-    - tau_final
-    - énergie totale
-    - export JSON
-    """
-
-    print(f"\n==================== {event_name} ====================\n")
-
-    # ------------------------------------------------------------
-    # Extraction du signal utile
-    # ------------------------------------------------------------
     fs = tsH.sample_rate.value
-    t0 = gps - signal_win
-    t1 = gps + signal_win
 
-    segH = tsH.crop(t0, t1)
-    segL = tsL.crop(t0, t1)
-
-    hH = np.asarray(segH.value, float)
-    hL = np.asarray(segL.value, float)
-
-    # ------------------------------------------------------------
-    # 1) BANDPASS
-    # ------------------------------------------------------------
-    hH_bp = safe_bandpass(hH, fs, flow, fhigh)
-    hL_bp = safe_bandpass(hL, fs, flow, fhigh)
-
-    # ------------------------------------------------------------
-    # 2) PSD bruit local
-    # ------------------------------------------------------------
-    noiseH = tsH.crop(t0 - noise_pad, t0 - 1.0)
-    noiseL = tsL.crop(t0 - noise_pad, t0 - 1.0)
-
-    fH_psd, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
-    fL_psd, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
-
-    # Interpolation correcte des deux PSD sur fH_psd
-    if not np.allclose(fH_psd, fL_psd):
-        S2 = np.interp(fH_psd, fL_psd, S2)
-
-    # IMPORTANT : S1 et S2 doivent TOUJOURS être interpolés sur freq FFT,
-    # pas uniquement S2 !
-    f_psd = fH_psd
-    # ------------------------------------------------------------
-    # 3) SPECTRE COHÉRENT
-    # ------------------------------------------------------------
+    # -------------------------------------------------------
+    # 1) PSD — zone de bruit robuste
+    # -------------------------------------------------------
+    start = tsH.t0.value
     try:
-        f_use, dEdf_use = coherent_spectrum(
-            hH_bp, hL_bp, fs,
-            f_psd, S1, S2,
-            distance_mpc,
-            model_energy
-        )
-    except Exception as e:
-        print(f"[ERREUR] Spectre impossible : {e}")
-        return None
-    # ------------------------------------------------------------
-    # 4) Energie totale
-    # ------------------------------------------------------------
-    E_total = float(np.trapezoid(dEdf_use, f_use))
+        if gps - noise_pad - 400 < start:
+            n0, n1 = start, start + 200
+        else:
+            n0, n1 = gps - noise_pad - 400, gps - noise_pad - 200
+        noiseH = tsH.crop(n0, n1)
+        noiseL = tsL.crop(n0, n1)
+    except:
+        noiseH = tsH.crop(gps - 1000, gps - 800)
+        noiseL = tsL.crop(gps - 1000, gps - 800)
 
-    # ------------------------------------------------------------
-    # 5) nu_eff
-    # ------------------------------------------------------------
-    """
-    denom = max(np.trapezoid(dEdf_use, f_use), 1e-30)
-    nu_eff = float(np.trapezoid(f_use * dEdf_use, f_use) / denom)
-    # --- Patch anti-broadcast : forcer vecteurs compatibles ---
-    f_use = np.array(f_use).flatten()
-    dEdf_use = np.array(dEdf_use).flatten()
+    fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
+    fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
+    if not np.allclose(fH, fL):
+        S2 = np.interp(fH, fL, S2)
+    f_psd = fH
+    # -------------------------------------------------------
+    # 2) Estimation du délai initial (NON filtré !)
+    # -------------------------------------------------------
+    segH = tsH.crop(gps - 0.2, gps + 0.2)
+    segL = tsL.crop(gps - 0.2, gps + 0.2)
 
-    if len(f_use) != len(dEdf_use) or len(f_use) < 10:
-        print("[ERREUR] Spectre trop court — skip event")
-        return {"E_total": 0.0, "m_sun": 0.0, "nu_eff": 0.0}
-    """
-    nu_eff = compute_nu_eff(f_use,dEdf_use);
-    # ------------------------------------------------------------
-    # 6) Phase log-spectrale (alpha, phi)
-    # ------------------------------------------------------------
-    alpha_logsin, phi_logsin = extract_phase_logsin(
-        np.array(f_use),
-        np.array(dEdf_use)
-    )
+    # >>> signaux bruts pour la corrélation <<< 
+    hH_delay = np.asarray(segH.value, float)
+    hL_delay = np.asarray(segL.value, float)
 
-    # ------------------------------------------------------------
-    # 7) tau_geo (géométrique)
-    # ------------------------------------------------------------
-    tau_geo = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
+    # Corrélation avec bon signe
+    tau_guess = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
 
-    # ------------------------------------------------------------
-    # 8) tau_final (fusion géo + phase)
-    # ------------------------------------------------------------
-    tau_final, tau_phase = combine_tau(
-        tau_geo,
-        alpha_logsin,
-        nu_eff,
-        w_geo=0.6,
-        w_phase=0.4,
-        tau_min=-0.02,
-        tau_max=0.02
-    )
+    # -------------------------------------------------------
+    # 3) Extraction du signal utile
+    # -------------------------------------------------------
+    half = signal_win * 0.5
+    winH = tsH.crop(gps - half, gps + half)
+    winL = tsL.crop(gps - half, gps + half)
 
-    # ------------------------------------------------------------
-    # Résultats
-    # ------------------------------------------------------------
-    # ------------------------------------------------------------
-    # 9) Construction directe du JSON (sans build_event_result)
-    # ------------------------------------------------------------
-    M_sun_J = M_sun * c**2
+    hH = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
+    hL = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
 
-    result = {
+    # -------------------------------------------------------
+    # 4) FFT courte
+    # -------------------------------------------------------
+    N = min(len(hH), len(hL))
+    w = tukey(N, 0.2)
+    H1 = np.fft.rfft(hH * w)
+    H2 = np.fft.rfft(hL * w)
+    f = np.fft.rfftfreq(N, 1/fs)
+
+    # -------------------------------------------------------
+    # 5) Spectre d'énergie cohérent
+    # -------------------------------------------------------
+    Hc = (H1 + H2) / 2
+    r = distance_mpc * Mpc
+    dEdf = np.abs(Hc)**2 * (r**2) * (f**2)
+    dEdf = np.nan_to_num(dEdf)
+
+    mask = (f >= flow) & (f <= fhigh)
+    f_use = f[mask]
+    dEdf_use = dEdf[mask]
+
+    # -------------------------------------------------------
+    # 6) Intégrales (E, m_sun, ν_eff)
+    # -------------------------------------------------------
+    E = float(np.trapz(dEdf_use, f_use)) * SCALE_EJ
+    m_sun = E / (M_sun * c**2)
+
+    den = np.trapz(dEdf_use, f_use)
+    nu_eff = float(np.trapz(f_use * dEdf_use, f_use) / den) if den > 0 else 0.0
+    # -------------------------------------------------------
+    os.makedirs("results", exist_ok=True)
+
+    out_json = {
         "event": event_name,
-        "gps": float(gps),                # ← demandé
-        "nu_eff": float(nu_eff),
-        "tau": float(tau_final),
-        "tau_geo": float(tau_geo),
-        "tau_phase": float(tau_phase),
-
-        # Phase log-spectrale
-        "alpha_logsin": float(alpha_logsin),
-        "phi_logsin": float(phi_logsin),
-
-        # Spectre d'énergie
-        "f": [float(x) for x in f_use],
-        "dEdf": [float(x) for x in dEdf_use],
-
-        # Énergies
-        "E_total": float(E_total),
-        "M_sun": float(E_total / M_sun_J),
-        "model_energy": model_energy
+        "distance_mpc": float(distance_mpc),
+        "freq_Hz": f_use.tolist(),
+        "dEdf_J_Hz": dEdf_use.tolist(),
+        "E_total_J": float(E),
+        "m_sun": float(m_sun),
+        "nu_eff_Hz": float(nu_eff),
+        "tau_s": float(tau_guess),
+        "flow_Hz": float(flow),
+        "fhigh_Hz": float(fhigh)
     }
+    with open(f"results/{event_name}.json", "w") as fj:
+        json.dump(out_json, fj, indent=2)
+    print(f"\n=== ANALYSE SPECTRALE {event_name} ===")
+    print(f"Distance: {distance_mpc} Mpc")
+    print(f"Énergie intrinsèque: {E:.3e} J ({m_sun:.3f} M☉)")
+    print(f"Fréquence effective: {nu_eff:.1f} Hz")
+    print(f"Référence d'amplitude: h★={H_STAR:.2e}")
 
-    # ------------------------------------------------------------
-    # Export JSON
-    # ------------------------------------------------------------
-    export_json_result(event_name, result)
+    if plot:
+        plt.figure(figsize=(10, 6))
+        plt.loglog(f_use, dEdf_use, lw=1.5, 
+                  label=f"{event_name} (E={E:.2e} J, ν_eff={nu_eff:.1f} Hz, d={distance_mpc} Mpc)")
 
-    # ------------------------------------------------------------
-    # Affichage console
-    # ------------------------------------------------------------
-    print(f"{event_name:20s} | ν_eff={nu_eff:7.1f} Hz | τ={tau_final:+.5f} s | "
-          f"E={E_total:.3e} J | M={result['M_sun']:.3f} M_sun")
+        f_log = np.geomspace(f_use[0], f_use[-1], 500)
+        dEdf_log = np.interp(f_log, f_use, dEdf_use)
+        log_smooth = gaussian_filter1d(np.log10(np.maximum(dEdf_log, 1e-50)), sigma=2)
 
-    return result
+        plt.loglog(f_log, 10**log_smooth, '--', lw=1, color='orange', alpha=0.7, label=f"{event_name} (lissé)")
+        plt.xlabel("Fréquence (Hz)", fontsize=12)
+        plt.ylabel("dE/df (J/Hz)", fontsize=12)
+        plt.title(f"Spectre d'énergie gravitationnelle intrinsèque\n{event_name} — h★={H_STAR:.2e}, d={distance_mpc} Mpc", fontsize=14)
+        plt.grid(True, which="both", alpha=0.3, linestyle='--')
+        plt.legend(fontsize=10)
+        plt.xlim(f_use[0], f_use[-1])
+        plt.ylim(auto=True)
 
-# ============================================================
-# 14) MAIN — INTERFACE PROFESSIONNELLE
-# ============================================================
+        plt.axvline(x=nu_eff, color='red', linestyle=':', linewidth=1, label=f"ν_eff = {nu_eff:.1f} Hz")
+
+        os.makedirs("plots", exist_ok=True)
+        plt.savefig(f"plots/{event_name}_spectre.png", dpi=200, bbox_inches='tight')
+        plt.show()
+
+    return {"E_total": E, "m_sun": m_sun, "nu_eff": nu_eff, "distance_mpc": distance_mpc}
+
 # ==========================
 # CLI
 # ==========================
@@ -732,23 +263,15 @@ def main():
     print(f"📡 Téléchargement des données pour {args.event}...")
     H1, L1 = fetch("H1", t0, t1), fetch("L1", t0, t1)
 
-    res = analyze_event(
-        args.event,
-        H1,
-        L1,
-        gps,
-        args.distance_mpc,
-        flow,
-        fhigh,
-        signal_win,
-        noise_pad,
-        model_energy="toi",
-        plot=args.plot
-    )
+    res = analyze_coherent_spectral(H1, L1, gps, args.distance_mpc,
+                                    event_name=args.event,
+                                    flow=flow, fhigh=fhigh,
+                                    noise_pad=noise_pad,
+                                    signal_win=signal_win, plot=args.plot)
 
     print(f"\n🎯 SYNTHÈSE FINALE: {args.event}")
     print(f"Distance: {args.distance_mpc} Mpc")
-    print(f"Énergie intrinsèque: {res['E_total']:.3e} J ({res['M_sun']:.3f} M☉)")
+    print(f"Énergie intrinsèque: {res['E_total']:.3e} J ({res['m_sun']:.3f} M☉)")
     print(f"Fréquence effective: {res['nu_eff']:.1f} Hz")
     print(f"NOTE: Énergie intrinsèque calculée avec correction de distance (×d²)")
     print(f"      Référence d'amplitude: h★={H_STAR:.2e}\n{'='*60}")
