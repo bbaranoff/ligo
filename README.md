@@ -2,7 +2,7 @@
 Testing LIGO research in Python  
 
 ```
-git clone https://github.col/bbaranoff/ligo
+git clone https://github.com/bbaranoff/ligo
 cd ligo
 source go.sh
 ```
