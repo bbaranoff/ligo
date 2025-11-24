@@ -15,9 +15,10 @@ Le dépôt est à usage exploratoire/recherche : il n’est pas (encore) une bib
 - `plots/` : dossier contenant les résultats graphiques générés.  
   
 ## 🧪 Installation  
-1. Cloner le dépôt :  
-   ```bash
-   git clone https://github.com/bbaranoff/ligo.git && cd ligo
+1. Cloner le dépôt :
+    
+```bash
+git clone https://github.com/bbaranoff/ligo.git && cd ligo
 ```
 
 2. Exécuter le script d’installation/initialisation :
