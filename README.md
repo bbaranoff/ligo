@@ -1,6 +1,12 @@
 # ligo  
 Testing LIGO research in Python  
-  
+
+```
+git clone https://github.col/bbaranoff/ligo
+cd ligo
+source go.sh
+```
+
 ## 🚀 Description  
 Ce projet propose une exploration des données et spectres de l’interféromètre LIGO (et liés à la physique des ondes gravitationnelles), implémentée en Python. Il inclut des scripts pour charger des références, tracer des spectres, et expérimenter avec les résultats de recherche.  
 Le dépôt est à usage exploratoire/recherche : il n’est pas (encore) une bibliothèque stable.  
