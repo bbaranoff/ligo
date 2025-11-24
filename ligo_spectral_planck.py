@@ -25,8 +25,8 @@ from gwpy.timeseries import TimeSeries
 c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
-H_STAR = 1e6  # amplitude RMS cible
-SCALE_EJ = 0.87e29
+H_STAR = 1  # amplitude RMS cible
+SCALE_EJ = 8e-12
 EVENT_PARAMS = {
     "GW150914":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 410},
     "GW151226":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 440},
@@ -184,16 +184,18 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     # ====== recentrage automatique du pic ======
     # détecte le vrai chirp = max de fréquence instantanée (pas amplitude)
     # --- Ajustement spécial GW170608 ---
+    """
     if event_name == "GW170608":
         # Fixe un merger court et propre
-        t_peak = gps + 0.005      # merger time
+        t_peak = gps + 0.01      # merger time
         signal_win = 0.25         # 250 ms max
     if event_name != "GW170608":
-        seg = tsH.crop(gps - 0.3, gps + 0.1)
-        h = np.asarray(seg.value, float)
-        dh = np.abs(np.diff(h))
-        imax = np.argmax(dh)
-        t_peak = seg.times.value[:-1][imax]
+    """
+    seg = tsH.crop(gps - 0.3, gps + 0.1)
+    h = np.asarray(seg.value, float)
+    dh = np.abs(np.diff(h))
+    imax = np.argmax(dh)
+    t_peak = seg.times.value[:-1][imax]
 
     half = signal_win * 0.5
     winH = tsH.crop(t_peak - half, t_peak + half)
@@ -201,12 +203,18 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
 
     hH = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
     hL = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
+    N = min(len(hH), len(hL))
+    w = tukey(N, 0.2)
+    peakH1 = np.max(np.abs(hH))
+    peakL1 = np.max(np.abs(hL))
+    peak = max(peakH1, peakL1)
 
+    if peak > 0:
+        hH = hH / peak * H_STAR
+        hL = hL / peak * H_STAR
     # -------------------------------------------------------
     # 4) FFT courte
     # -------------------------------------------------------
-    N = min(len(hH), len(hL))
-    w = tukey(N, 0.2)
     H1 = np.fft.rfft(hH * w)
     H2 = np.fft.rfft(hL * w)
     f = np.fft.rfftfreq(N, 1/fs)
@@ -226,11 +234,11 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     # -------------------------------------------------------
     # 6) Intégrales (E, m_sun, ν_eff)
     # -------------------------------------------------------
-    E = float(np.trapz(dEdf_use, f_use)) * SCALE_EJ
-    m_sun = E / (M_sun * c**2)
 
     den = np.trapz(dEdf_use, f_use)
     nu_eff = float(np.trapz(f_use * dEdf_use, f_use) / den) if den > 0 else 0.0
+    E = float(np.trapz(dEdf_use, f_use)) * SCALE_EJ
+    m_sun = E / (M_sun * c**2)
     # -------------------------------------------------------
     os.makedirs("results", exist_ok=True)
 
