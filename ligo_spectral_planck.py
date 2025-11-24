@@ -28,7 +28,29 @@ Mpc = 3.085677581491367e22
 H_STAR = 1e6  # amplitude RMS cible
 SCALE_EJ = 0.87e29
 EVENT_PARAMS = {
-    "default":  {"flow": 20.0, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200.0},
+    "GW150914":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 410},
+    "GW151226":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 440},
+    "GW170104":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 880},
+    "GW170608":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 320},
+    "GW170729":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2840},
+    "GW170809":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 990},
+    "GW170814":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 600},
+    "GW170817":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 40},
+
+    "GW190403_051519":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1590},
+    "GW190412":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 740},
+    "GW190413_052954":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 700},
+    "GW190413_134308":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 590},
+    "GW190421_213856":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1600},
+    "GW190503_185404":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1190},
+    "GW190514_065416":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2070},
+    "GW190517_055101":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1500},
+    "GW190519_153544":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2520},
+    "GW190521":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 5300},
+    "GW190828_063405":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2150},
+    "GW190828_065509":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1060},
+
+    "default":           {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 500}
 }
 
 # ==========================
@@ -44,7 +66,14 @@ def safe_bandpass(x, fs, f1, f2, order=4):
     if f2_safe <= f1:
         raise ValueError(f"Bandpass impossible: f1={f1} ≥ f2_safe={f2_safe}")
     sos = butter(order, [f1, f2_safe], btype="bandpass", fs=fs, output="sos")
-    return sosfiltfilt(sos, x)   # <<< SUPPRESSION DU FENÊTRAGE
+#    return sosfiltfilt(sos, x)   # <<< SUPPRESSION DU FENÊTRAGE
+
+    x_filt = sosfiltfilt(sos, x)
+    N = len(x_filt)
+    win = tukey(N, 0.05)
+    return x_filt * win
+
+
 
 def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
     from numpy.fft import rfft, rfftfreq
@@ -152,9 +181,20 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     # -------------------------------------------------------
     # 3) Extraction du signal utile
     # -------------------------------------------------------
+    # ====== recentrage automatique du pic ======
+    # détecte le vrai chirp = max de fréquence instantanée (pas amplitude)
+    seg = tsH.crop(gps - 0.3, gps + 0.1)
+    h = np.asarray(seg.value, float)
+
+    # dérivée (approx) → montée de fréquence
+    dh = np.abs(np.diff(h))
+
+    imax = np.argmax(dh)
+    t_peak = seg.times.value[:-1][imax]
+
     half = signal_win * 0.5
-    winH = tsH.crop(gps - half, gps + half)
-    winL = tsL.crop(gps - half, gps + half)
+    winH = tsH.crop(t_peak - half, t_peak + half)
+    winL = tsL.crop(t_peak - half, t_peak + half)
 
     hH = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
     hL = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
