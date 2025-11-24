@@ -32,7 +32,7 @@ def load_spec(path):
     dEdf = np.array(d["dEdf"], float)
 
     # --- normalisation par énergie totale ---
-    E_total = np.trapz(dEdf, f)
+    E_total = np.trapezoid(dEdf, f)
     if E_total == 0 or np.isnan(E_total):
         return f, dEdf * 0  # cas degueu / vide
 
@@ -55,7 +55,7 @@ for i, jf in enumerate(files):
         continue
         
     # Normalisation et lissage
-    E = np.trapz(np.maximum(dEdf, 0), f_Hz)
+    E = np.trapezoid(np.maximum(dEdf, 0), f_Hz)
     spec_norm = np.maximum(dEdf / max(E, 1e-30), 1e-50)
     sigma = max(1, len(spec_norm)//300)
     smooth = gaussian_filter1d(np.log10(spec_norm), sigma=sigma)

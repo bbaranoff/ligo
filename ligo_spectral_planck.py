@@ -263,7 +263,7 @@ def compute_energy_spectrum(f, h_phys, distance_mpc, model="toi"):
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
 
     # énergie totale (intégrale)
-    E_total = float(np.trapz(dEdf, f))
+    E_total = float(np.trapezoid(dEdf, f))
 
     return dEdf, E_total
 # ============================================================
@@ -413,12 +413,12 @@ def compute_nu_eff(freq, dEdf):
 
     # lissage
     e_s = np.convolve(e, np.ones(7)/7, mode="same")
-    E = np.trapz(e_s, f)
+    E = np.trapezoid(e_s, f)
 
     if E <= 0:
         return 0.0
 
-    return float(np.trapz(f * e_s, f) / E)
+    return float(np.trapezoid(f * e_s, f) / E)
 
 """
 def compute_nu_eff(f, dEdf):
@@ -427,14 +427,14 @@ def compute_nu_eff(f, dEdf):
     S = np.asarray(dEdf, float)
 
     S = np.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
-    den = np.trapz(S, f)
+    den = np.trapezoid(S, f)
 
     if den <= 0:
         # fallback = max spectral
         idx = int(np.argmax(S))
         return float(f[idx])
 
-    num = np.trapz(f * S, f)
+    num = np.trapezoid(f * S, f)
     nu_eff = num / den
 
     # si aberrant, fallback f_peak
@@ -617,14 +617,14 @@ def analyze_event(event_name,
     # ------------------------------------------------------------
     # 4) Energie totale
     # ------------------------------------------------------------
-    E_total = float(np.trapz(dEdf_use, f_use))
+    E_total = float(np.trapezoid(dEdf_use, f_use))
 
     # ------------------------------------------------------------
     # 5) nu_eff
     # ------------------------------------------------------------
     """
-    denom = max(np.trapz(dEdf_use, f_use), 1e-30)
-    nu_eff = float(np.trapz(f_use * dEdf_use, f_use) / denom)
+    denom = max(np.trapezoid(dEdf_use, f_use), 1e-30)
+    nu_eff = float(np.trapezoid(f_use * dEdf_use, f_use) / denom)
     # --- Patch anti-broadcast : forcer vecteurs compatibles ---
     f_use = np.array(f_use).flatten()
     dEdf_use = np.array(dEdf_use).flatten()
