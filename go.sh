@@ -9,7 +9,7 @@ fi
 source .env/bin/activate
 
 # 3. installer
-
+pip install --upgrade pip
 pip3 install scipy gwosc numpy matplotlib gwpy
 # ou pip install -r requirements.txt
 
