@@ -5,7 +5,7 @@
   "GW170608":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 320 },
   "GW170729":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2840 },
   "GW170809":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 990 },
-  "GW170814":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 600 },
+  "GW170814":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 540 },
   "GW170817":          { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 40 },
 
   "GW190403_051519":   { "flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1590 },
