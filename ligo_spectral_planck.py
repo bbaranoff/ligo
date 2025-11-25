@@ -112,12 +112,7 @@ def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
     hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
 
     # --- 3) cross-corr brute + filtrée ---
-    tau_raw = estimate_delay_time(hH_raw, hL_raw, fs)
-    tau_flt = estimate_delay_time(hH_f, hL_f, fs)
-
-    # --- 4) combinaison robuste ---
-    tau = 0.7 * tau_flt + 0.3 * tau_raw
-
+    tau = estimate_delay_time(hH_f, hL_f, fs)
     return float(tau)
 
 @njit(cache=True, fastmath=True)
