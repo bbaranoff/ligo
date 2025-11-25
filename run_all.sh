@@ -46,7 +46,7 @@ EOF
 )
 
     # run analyse
-    $PY "$SCRIPT" --event "$ev" --distance-mpc "$dist" >/dev/null 2>/dev/null || continue
+    $PY "$SCRIPT" --event "$ev" >> events.log
 
     # lecture résultats
     read -r nu tau msun energy < <(

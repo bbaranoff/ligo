@@ -8,7 +8,7 @@ Analyse cohérente LIGO H1–L1 (GWOSC)
 - Lissage log-log du spectre d'énergie.
 - Énergie effective normalisée (indépendante de la distance après correction).
 """
-
+from numba import njit
 from scipy.signal.windows import dpss
 import argparse, os, json
 import numpy as np
@@ -25,37 +25,19 @@ from scipy.integrate import trapezoid
 c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
-H_STAR = 1  # amplitude RMS cible
-SCALE_EJ = 8e-12
-EVENT_PARAMS = {
-    "GW150914":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 410},
-    "GW151226":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 440},
-    "GW170104":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 880},
-    "GW170608":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 320},
-    "GW170729":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2840},
-    "GW170809":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 990},
-    "GW170814":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 600},
-    "GW170817":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 40},
-
-    "GW190403_051519":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1590},
-    "GW190412":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 740},
-    "GW190413_052954":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 700},
-    "GW190413_134308":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 590},
-    "GW190421_213856":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1600},
-    "GW190503_185404":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1190},
-    "GW190514_065416":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2070},
-    "GW190517_055101":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1500},
-    "GW190519_153544":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2520},
-    "GW190521":          {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 5300},
-    "GW190828_063405":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 2150},
-    "GW190828_065509":   {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 1060},
-
-    "default":           {"flow": 20, "fhigh": 350, "signal_win": 1.2, "noise_pad": 1200, "distance_mpc": 500}
-}
-
+SCALE_EJ = 6e-12
+H_STAR = 1
 # ==========================
 # Utilitaires
 # ==========================
+def load_event_params():
+    path = os.path.join(os.path.dirname(__file__), "event_params.json")
+    print("[DEBUG] Chargement JSON depuis :", path)
+    with open(path, "r") as f:
+        return json.load(f)
+
+EVENT_PARAMS = load_event_params()
+
 def fetch(det, t0, t1, outdir="data") -> TimeSeries:
     os.makedirs(outdir, exist_ok=True)
     return TimeSeries.fetch_open_data(det, t0, t1, cache=True)
@@ -64,16 +46,16 @@ def safe_bandpass(x, fs, f1, f2, order=4):
     nyq = 0.5 * fs
     f2_safe = min(f2, 0.95 * nyq)
     if f2_safe <= f1:
-        raise ValueError(f"Bandpass impossible: f1={f1} ≥ f2_safe={f2_safe}")
+        f2_safe = f1 + 10.0
+
     sos = butter(order, [f1, f2_safe], btype="bandpass", fs=fs, output="sos")
-#    return sosfiltfilt(sos, x)   # <<< SUPPRESSION DU FENÊTRAGE
+    xf = sosfiltfilt(sos, x)
 
-    x_filt = sosfiltfilt(sos, x)
-    N = len(x_filt)
+    # fenêtre douce = seulement 5%
+    N = len(xf)
     win = tukey(N, 0.05)
-    return x_filt * win
 
-
+    return xf * win
 
 def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
     from numpy.fft import rfft, rfftfreq
@@ -94,22 +76,24 @@ def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
     f = rfftfreq(nseg, d=1.0 / fs)
     return f, S
 
-def estimate_delay_time(h1, h2, fs, max_delay_ms=10.0):
+def estimate_delay_time(h1, h2, fs, max_delay_ms=15.0):
     N = min(len(h1), len(h2))
-    w = np.ones(N)  # pas de fenêtre temporelle
-    X = np.fft.rfft(h1[:N] * w, n=2*N)
-    Y = np.fft.rfft(h2[:N] * w, n=2*N)
+    x = h1[:N] - np.mean(h1[:N])
+    y = h2[:N] - np.mean(h2[:N])
+
+    X = np.fft.rfft(x, n=2*N)
+    Y = np.fft.rfft(y, n=2*N)
     R = Y * np.conj(X)
+
     r = np.fft.irfft(R)
     r = np.fft.fftshift(r)
 
     lags = np.arange(-N, N) / fs
-    lim = max_delay_ms / 1000
-    mask = np.abs(lags) <= lim
-    r_mask = r[mask]; l_mask = lags[mask]
+    lim = max_delay_ms * 1e-3
+    m = np.abs(lags) <= lim
 
-    i = np.argmax(np.abs(r_mask))
-    return float(l_mask[i])
+    i = np.argmax(np.abs(r[m]))
+    return float(lags[m][i])
 
 def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
     """
@@ -136,14 +120,82 @@ def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
 
     return float(tau)
 
+@njit(cache=True, fastmath=True)
+def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
+    n = H1.shape[0]
+    dEdf = np.empty(n, dtype=np.float64)
+    eps = 1e-22
+
+    for i in range(n):
+
+        # PSD sécurisées
+        s1 = S1[i] if S1[i] > eps else eps
+        s2 = S2[i] if S2[i] > eps else eps
+
+        w1 = 1.0 / s1
+        w2 = 1.0 / s2
+
+        # phase propre
+        ph = phi[i] if not np.isnan(phi[i]) else 0.0
+        c = np.cos(ph)
+        s = np.sin(ph)
+        eiphi = c + 1j*s
+
+        # MOYENNE COHÉRENTE CORRECTE
+        num = H1[i] * w1 + eiphi * H2[i] * w2
+        den = w1 + w2 + eps
+
+        Hc = num / den
+
+        # énergie GR
+        dEdf[i] = (r*r) * (f[i]*f[i]) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
+
+    return dEdf
+
+@njit(cache=True, fastmath=True)
+def coherent_energy_numba_3(H1, H2, H3, S1, S2, S3, phi12, phi13, f, r):
+    n = H1.shape[0]
+    dEdf = np.empty(n, dtype=np.float64)
+    eps = 1e-22
+
+    for i in range(n):
+
+        s1 = S1[i] if S1[i] > eps else eps
+        s2 = S2[i] if S2[i] > eps else eps
+        s3 = S3[i] if S3[i] > eps else eps
+
+        w1 = 1.0 / s1
+        w2 = 1.0 / s2
+        w3 = 1.0 / s3
+
+        ph12 = phi12[i] if not np.isnan(phi12[i]) else 0.0
+        ph13 = phi13[i] if not np.isnan(phi13[i]) else 0.0
+
+        e12 = np.cos(ph12) + 1j*np.sin(ph12)
+        e13 = np.cos(ph13) + 1j*np.sin(ph13)
+
+        num = H1[i] * w1 + e12 * H2[i] * w2 + e13 * H3[i] * w3
+        den = w1 + w2 + w3 + eps
+
+        Hc = num / den
+
+        dEdf[i] = (r*r) * (f[i]**2) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
+
+    return dEdf
+
 # ==========================
 # ANALYSE SPECTRALE — VERSION CORRIGÉE
 # ==========================
-def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
-                              flow=20.0, fhigh=350.0, noise_pad=1200.0,
-                              signal_win=1.2, plot=False):
+def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
+                              event_name="", flow=20.0, fhigh=350.0,
+                              noise_pad=50.0, signal_win=1.2, plot=False):
 
     fs = tsH.sample_rate.value
+
+    use_virgo = (V1 is not None)
+    hV = None
+    H3 = None
+    S3 = None
 
     # -------------------------------------------------------
     # 1) PSD — zone de bruit robuste
@@ -162,8 +214,16 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
 
     fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
     fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
-    if not np.allclose(fH, fL):
-        S2 = np.interp(fH, fL, S2)
+    if use_virgo and H3 is not None:
+        try:
+            fV, S3 = psd_welch(V1, fmin=flow, fmax=fhigh)
+            if not np.allclose(f_psd, fV):
+                S3 = np.interp(f_psd, fV, S3)
+        except Exception:
+            use_virgo = False
+            S3 = None
+        if not np.allclose(fH, fL):
+            S2 = np.interp(fH, fL, S2)
     f_psd = fH
     # -------------------------------------------------------
     # 2) Estimation du délai initial (NON filtré !)
@@ -200,7 +260,19 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     half = signal_win * 0.5
     winH = tsH.crop(t_peak - half, t_peak + half)
     winL = tsL.crop(t_peak - half, t_peak + half)
+    if use_virgo:
+            try:
+                winV = V1.crop(t_peak - half, t_peak + half)
+                hV = safe_bandpass(np.asarray(winV.value, float), fs, flow, fhigh)
 
+                # normalisation comme H1/L1
+                if peak > 0:
+                    hV = hV / peak * H_STAR
+
+            except Exception:
+                use_virgo = False
+                hV = None
+        
     hH = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
     hL = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
     N = min(len(hH), len(hL))
@@ -212,21 +284,47 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     if peak > 0:
         hH = hH / peak * H_STAR
         hL = hL / peak * H_STAR
+
     # -------------------------------------------------------
     # 4) FFT courte
     # -------------------------------------------------------
     H1 = np.fft.rfft(hH * w)
     H2 = np.fft.rfft(hL * w)
-    f = np.fft.rfftfreq(N, 1/fs)
+    if use_virgo and hV is not None:
+        H3 = np.fft.rfft(hV * w)
+    else:
+        H3 = None
+    if use_virgo:
+        if H3 is None or np.all(H3 == 0):
+            print("[WARN] Virgo désactivé : signal non exploitable")
+            use_virgo = False
+    f  = np.fft.rfftfreq(N, 1/fs)
 
     # -------------------------------------------------------
-    # 5) Spectre d'énergie cohérent
+    # 5) Spectre d'énergie cohérent (version correcte)
     # -------------------------------------------------------
-    Hc = (H1 + H2) / 2
+
+    # Phase cohérente entre H1 et H2 (retard tau_guess)
+    phi = 2 * np.pi * f * tau_guess
+    if use_virgo and hV is not None:
+        phi12 = phi
+        phi13 = phi  # on utilise même tau_guess pour V1, sinon incohérent
+    else:
+        phi12 = phi
+        phi13 = None
     r = distance_mpc * Mpc
-    dEdf = np.abs(Hc)**2 * (r**2) * (f**2)
+    # Combinaison cohérente pondérée par PSD
+    eps = 1e-30
+    # Version compilée Numba (15× plus rapide)
+    if use_virgo and H3 is not None and S3 is not None:
+        phi12 = phi
+        phi13 = phi
+        dEdf = coherent_energy_numba_3(H1, H2, H3, S1, S2, S3, phi12, phi13, f, r)
+    else:
+        dEdf = coherent_energy_numba(H1, H2, S1, S2, phi, f, r)
     dEdf = np.nan_to_num(dEdf)
 
+    # Bande utile
     mask = (f >= flow) & (f <= fhigh)
     f_use = f[mask]
     dEdf_use = dEdf[mask]
@@ -241,6 +339,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     m_sun = E / (M_sun * c**2)
     # -------------------------------------------------------
     os.makedirs("results", exist_ok=True)
+
 
     out_json = {
         "event": event_name,
@@ -292,29 +391,73 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
 # CLI
 # ==========================
 def main():
-    ap = argparse.ArgumentParser(description="Analyse LIGO cohérente h★=1 (énergie intrinsèque)")
-    ap.add_argument("--event", required=True)
-    ap.add_argument("--distance-mpc", type=float, required=True, 
-                   help="Distance de l'événement en Mpc (utilisée pour calculer l'énergie intrinsèque)")
+
+    # ----------------------------
+    # Arguments CLI
+    # ----------------------------
+    ap = argparse.ArgumentParser(description="Analyse spectrale cohérente LIGO/Virgo (h★ → énergie intrinsèque)")
+
+    ap.add_argument("--event", type=str, help="Nom d'événement")
+    ap.add_argument("--list-events", action="store_true")
+
     ap.add_argument("--flow", type=float)
     ap.add_argument("--fhigh", type=float)
     ap.add_argument("--signal-win", type=float)
     ap.add_argument("--noise-pad", type=float)
+    ap.add_argument("--distance-mpc", type=float)
     ap.add_argument("--plot", action="store_true")
+
     args = ap.parse_args()
 
-    evp = EVENT_PARAMS.get(args.event, EVENT_PARAMS["default"])
-    flow = evp["flow"] if args.flow is None else args.flow
-    fhigh = evp["fhigh"] if args.fhigh is None else args.fhigh
-    signal_win = evp["signal_win"] if args.signal_win is None else args.signal_win
-    noise_pad = evp["noise_pad"] if args.noise_pad is None else args.noise_pad
+    # ----------------------------
+    # Liste des événements
+    # ----------------------------
+    if args.list_events:
+        print("=== Événements disponibles (JSON) ===")
+        for k in sorted(EVENT_PARAMS.keys()):
+            print(" -", k)
+        return
 
-    gps = datasets.event_gps(args.event)
-    t0, t1 = gps - 1200.0, gps + 1200.0
+    if not args.event:
+        raise ValueError("Veuillez fournir --event <GWxxxxxx>")
+
+    ev = args.event
+
+    # ----------------------------
+    # Paramètres événement
+    # ----------------------------
+    if ev not in EVENT_PARAMS:
+        raise ValueError(f"Événement '{ev}' absent dans event_params.json")
+
+    evp = EVENT_PARAMS[ev]
+
+    flow        = args.flow        if args.flow        is not None else evp["flow"]
+    fhigh       = args.fhigh       if args.fhigh       is not None else evp["fhigh"]
+    signal_win  = args.signal_win  if args.signal_win  is not None else evp["signal_win"]
+    noise_pad   = args.noise_pad   if args.noise_pad   is not None else evp["noise_pad"]
+
+    # Distance JSON + override CLI
+    distance_mpc = args.distance_mpc if args.distance_mpc is not None else evp["distance_mpc"]
+
+    gps = datasets.event_gps(ev)
+
+    t0_noise = gps - noise_pad
+    t1_noise = gps + noise_pad
+    # Fenêtres absolues
+    # bruits avant/après = noise_pad
+    # signal = signal_win
+    H1, L1 = fetch("H1", t0_noise, t1_noise), fetch("L1", t0_noise, t1_noise)
+
+    # Tentative Virgo
+    try:
+        V1 = fetch("V1", t0_noise, t1_noise)
+        print(" → Virgo OK")
+    except Exception:
+        V1 = None
+        print(" → Virgo non disponible")
     print(f"📡 Téléchargement des données pour {args.event}...")
-    H1, L1 = fetch("H1", t0, t1), fetch("L1", t0, t1)
 
-    res = analyze_coherent_spectral(H1, L1, gps, args.distance_mpc,
+    res = analyze_coherent_spectral(H1, L1, gps, distance_mpc, V1,
                                     event_name=args.event,
                                     flow=flow, fhigh=fhigh,
                                     noise_pad=noise_pad,
