@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.cm as cm
-
+from scipy.integrate import trapezoid
 plt.rcParams.update({
     "figure.figsize": (10, 6),
     "axes.grid": True,

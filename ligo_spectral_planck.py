@@ -18,7 +18,7 @@ from scipy.signal.windows import tukey
 from scipy.ndimage import gaussian_filter1d
 from gwosc import datasets
 from gwpy.timeseries import TimeSeries
-
+from scipy.integrate import trapezoid
 # ==========================
 # Constantes physiques
 # ==========================
@@ -235,9 +235,9 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, event_name="",
     # 6) Intégrales (E, m_sun, ν_eff)
     # -------------------------------------------------------
 
-    den = np.trapz(dEdf_use, f_use)
-    nu_eff = float(np.trapz(f_use * dEdf_use, f_use) / den) if den > 0 else 0.0
-    E = float(np.trapz(dEdf_use, f_use)) * SCALE_EJ
+    den = trapezoid(dEdf_use, f_use)
+    nu_eff = float(trapezoid(f_use * dEdf_use, f_use) / den) if den > 0 else 0.0
+    E = float(trapezoid(dEdf_use, f_use)) * SCALE_EJ
     m_sun = E / (M_sun * c**2)
     # -------------------------------------------------------
     os.makedirs("results", exist_ok=True)
