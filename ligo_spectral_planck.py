@@ -25,7 +25,7 @@ from scipy.integrate import trapezoid
 c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
-SCALE_EJ = 6e-12
+SCALE_EJ = 8e-12
 H_STAR = 1
 # ==========================
 # Utilitaires
