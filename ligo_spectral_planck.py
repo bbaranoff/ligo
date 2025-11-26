@@ -160,7 +160,7 @@ def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
 
     # --- 3) cross-corr brute + filtrée ---
     tau = estimate_delay_time(hH_f, hL_f, fs)
-    return float(tau)
+    return -abss(float(tau))
 
 @njit(cache=True, fastmath=True)
 def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
@@ -192,7 +192,7 @@ def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
         # énergie GR
         dEdf[i] = (r*r) * (f[i]*f[i]) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
 
-    return dEdf
+    return dEdf, tau
 
 # ==========================
 # ANALYSE SPECTRALE — VERSION CORRIGÉE
@@ -220,7 +220,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
 
     fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
     fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
-    g = fH
+
     # -------------------------------------------------------
     # 2) Estimation du délai initial (NON filtré !)
     # -------------------------------------------------------
@@ -234,7 +234,8 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
     hH = safe_bandpass(hH_delay, fs, flow, fhigh)
     hL = safe_bandpass(hL_delay, fs, flow, fhigh)
     # Corrélation avec bon signe
-    tau_guess = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
+    tau = coherent_energy_numba(H1, H2, S1, S2, phi, f, r)
+
 
     # -------------------------------------------------------
     # 3) Extraction du signal utile
@@ -263,8 +264,8 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
     # -------------------------------------------------------
     # 5) Spectre d'énergie cohérent (version correcte)
     # -------------------------------------------------------
-    # Phase cohérente entre H1 et H2 (retard tau_guess)
-    phi = 2 * np.pi * f * tau_guess
+    # Phase cohérente entre H1 et H2 (retard tau)
+    phi = 2 * np.pi * f
     # Combinaison cohérente pondérée par PSD
     eps = 1e-30
     r = distance_mpc * Mpc
@@ -286,7 +287,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
         "E_total_J": float(E),
         "m_sun": float(m_sun),
         "nu_eff": compute_all_nu(f, dEdf),
-        "tau_s": float(tau_guess),
+        "tau_s": float(tau),
         "flow_Hz": float(flow),
         "fhigh_Hz": float(fhigh)
     }
@@ -439,7 +440,7 @@ def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
 
     # --- 3) cross-corr brute + filtrée ---
     tau = estimate_delay_time(hH_f, hL_f, fs)
-    return float(tau)
+    return -abs(float(tau))
 
 @njit(cache=True, fastmath=True)
 def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
@@ -470,37 +471,6 @@ def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
 
         # énergie GR
         dEdf[i] = (r*r) * (f[i]*f[i]) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
-
-    return dEdf
-
-@njit(cache=True, fastmath=True)
-def coherent_energy_numba_3(H1, H2, H3, S1, S2, S3, phi12, phi13, f, r):
-    n = H1.shape[0]
-    dEdf = np.empty(n, dtype=np.float64)
-    eps = 1e-22
-
-    for i in range(n):
-
-        s1 = S1[i] if S1[i] > eps else eps
-        s2 = S2[i] if S2[i] > eps else eps
-        s3 = S3[i] if S3[i] > eps else eps
-
-        w1 = 1.0 / s1
-        w2 = 1.0 / s2
-        w3 = 1.0 / s3
-
-        ph12 = phi12[i] if not np.isnan(phi12[i]) else 0.0
-        ph13 = phi13[i] if not np.isnan(phi13[i]) else 0.0
-
-        e12 = np.cos(ph12) + 1j*np.sin(ph12)
-        e13 = np.cos(ph13) + 1j*np.sin(ph13)
-
-        num = H1[i] * w1 + e12 * H2[i] * w2 + e13 * H3[i] * w3
-        den = w1 + w2 + w3 + eps
-
-        Hc = num / den
-
-        dEdf[i] = (r*r) * (f[i]**2) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
 
     return dEdf
 
@@ -557,7 +527,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
     hL_delay = np.asarray(segL.value, float)
 
     # Corrélation avec bon signe
-    tau_guess = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
+    tau = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
 
     # -------------------------------------------------------
     # 3) Extraction du signal utile
@@ -626,7 +596,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
     # -------------------------------------------------------
 
     # Phase cohérente entre H1 et H2 (retard tau_guess)
-    phi = 2 * np.pi * f * tau_guess
+    phi = 2 * np.pi * f * tau
     if use_virgo and hV is not None:
         phi12 = phi
         phi13 = phi  # on utilise même tau_guess pour V1, sinon incohérent
@@ -670,7 +640,7 @@ def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
         "E_total_J": float(E),
         "m_sun": float(m_sun),
         "nu_eff_Hz": float(nu_eff),
-        "tau_s": float(tau_guess),
+        "tau_s": float(tau),
         "flow_Hz": float(flow),
         "fhigh_Hz": float(fhigh)
     }
@@ -793,3 +763,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
