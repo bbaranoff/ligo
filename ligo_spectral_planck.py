@@ -53,7 +53,7 @@ M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
 
 DEFAULT_HSTAR = 1.0
-DEFAULT_SCALE_EJ = 8e-12
+DEFAULT_SCALE_EJ = 1.0
 
 # ------------------
 # IO params
@@ -126,14 +126,24 @@ def safe_bandpass(x: np.ndarray, fs: float, f1: float, f2: float, order: int = 4
     return y * win
 
 
-def psd_welch_median(x: np.ndarray, fs: float, seglen: float = 4.0, overlap: float = 2.0,
-                    fmin: float = 10.0, fmax: float = 1024.0) -> Tuple[np.ndarray, np.ndarray]:
-    """PSD robuste par mediane de Welch (fenetre Tukey)."""
+def psd_welch_median(
+    x: np.ndarray,
+    fs: float,
+    seglen: float = 4.0,
+    overlap: float = 2.0,
+    fmin: float = 10.0,
+    fmax: float = 1024.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """PSD robuste par médiane de Welch (fenêtre Tukey), tolérante aux NaN."""
     x = np.asarray(x, float)
+
+    # GWOSC peut contenir NaN/Inf : si on laisse passer, PSD -> NaN -> E=0.
+    if not np.isfinite(x).all():
+        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
     nseg = int(seglen * fs)
     nhop = int((seglen - overlap) * fs)
     if nseg < 16 or nhop < 1 or x.size < nseg:
-        # fallback simple
         nseg = min(x.size, max(256, int(1.0 * fs)))
         nhop = max(1, nseg // 2)
 
@@ -143,21 +153,117 @@ def psd_welch_median(x: np.ndarray, fs: float, seglen: float = 4.0, overlap: flo
     specs = []
     for i in range(0, x.size - nseg + 1, nhop):
         seg = x[i:i + nseg]
+
+        if not np.isfinite(seg).all():
+            seg = np.nan_to_num(seg, nan=0.0, posinf=0.0, neginf=0.0)
+
+        seg = seg - float(np.mean(seg))
+
         seg = safe_bandpass(seg, fs, fmin, fmax)
+        if not np.isfinite(seg).all():
+            # filtre qui diverge / segment foireux -> on jette
+            continue
+
         X = np.fft.rfft(seg * win)
         Pxx = (2.0 / (fs * U)) * (np.abs(X) ** 2)
-        specs.append(Pxx)
 
-    if not specs:
-        f = np.fft.rfftfreq(nseg, d=1.0 / fs)
-        return f, np.ones_like(f) * 1e-44
+        if np.isfinite(Pxx).all():
+            specs.append(Pxx)
 
-    S = np.median(np.stack(specs, axis=0), axis=0)
     f = np.fft.rfftfreq(nseg, d=1.0 / fs)
 
-    # securite
+    if not specs:
+        return f, np.ones_like(f) * 1e-44  # fallback bruit blanc
+
+    S = np.median(np.stack(specs, axis=0), axis=0)
+
+    # sécurité numérique
+    S = np.asarray(S, float)
+    bad = (~np.isfinite(S)) | (S <= 0.0)
+    if bad.all():
+        S = np.ones_like(S) * 1e-44
+    else:
+        fill = float(np.nanmedian(S[~bad]))
+        if not np.isfinite(fill) or fill <= 0:
+            fill = 1e-44
+        S[bad] = fill
+
     S = np.maximum(S, 1e-60)
     return f, S
+
+def sanitize_psd(f: np.ndarray, S: np.ndarray, name: str = "PSD") -> Tuple[np.ndarray, np.ndarray]:
+    """Nettoie une PSD : garantit finie, >0, et interp stable."""
+    f = np.asarray(f, float)
+    S = np.asarray(S, float)
+
+    if f.size != S.size or f.size < 8:
+        raise RuntimeError(f"[FATAL] {name}: PSD vide/invalide")
+
+    bad = (~np.isfinite(S)) | (S <= 0.0)
+    if bad.all():
+        return f, np.ones_like(S) * 1e-44
+
+    fill = float(np.nanmedian(S[~bad]))
+    if not np.isfinite(fill) or fill <= 0:
+        fill = 1e-44
+
+    S2 = S.copy()
+    S2[bad] = fill
+    S2 = np.maximum(S2, 1e-60)
+    return f, S2
+
+def spectral_bandwidth_features(freq_hz: np.ndarray, spec: np.ndarray) -> dict:
+    """
+    freq_hz : array 1D croissant
+    spec    : array 1D >=0 (ex: |H(f)|^2, ou densité d'énergie spectrale)
+    Retourne f10, f50, f90, dnu_80, mu_f, sigma_f.
+    """
+    f = np.asarray(freq_hz, dtype=float)
+    s = np.asarray(spec, dtype=float)
+
+    if f.ndim != 1 or s.ndim != 1 or f.size != s.size or f.size < 4:
+        return {
+            "f10": np.nan, "f50": np.nan, "f90": np.nan,
+            "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan
+        }
+
+    # sécurité : pas de négatif
+    s = np.maximum(s, 0.0)
+
+    # intégrale totale
+    total = float(trapezoid(s, f))
+    if not np.isfinite(total) or total <= 0:
+        return {
+            "f10": np.nan, "f50": np.nan, "f90": np.nan,
+            "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan
+        }
+
+    # cumul normalisé
+    # (trapz cumulatif via intégration par trapèzes)
+    df = np.diff(f)
+    mid = 0.5 * (s[:-1] + s[1:])
+    cum = np.concatenate(([0.0], np.cumsum(mid * df)))
+    cdf = cum / cum[-1]
+
+    # percentiles
+    f10 = np.interp(0.10, cdf, f)
+    f50 = np.interp(0.50, cdf, f)
+    f90 = np.interp(0.90, cdf, f)
+    dnu_80 = f90 - f10
+
+    # moments
+    mu_f = float(trapezoid(f * s, f) / total)
+    var = float(trapezoid(((f - mu_f) ** 2) * s, f) / total)
+    sigma_f = np.sqrt(max(var, 0.0))
+
+    return {
+        "f10": float(f10),
+        "f50": float(f50),
+        "f90": float(f90),
+        "dnu_80": float(dnu_80),
+        "mu_f": float(mu_f),
+        "sigma_f": float(sigma_f),
+    }
 
 
 def estimate_delay_time(x: np.ndarray, y: np.ndarray, fs: float, max_delay_ms: float = 15.0) -> float:
@@ -264,11 +370,11 @@ def analyze_event(
     peak_quantile: float,
     hstar_in: float,
     scale_ej_in: float,
-    calibrate_hstar_event: Optional[str],
-    hpeak_target: Optional[float],
-    calibrate_scale_event: Optional[str],
-    msun_target: Optional[float],
-    plot: bool,
+    calibrate_hstar_event: Optional[str] = None,
+    hpeak_target: Optional[float] = None,
+    calibrate_scale_event: Optional[str] = None,
+    msun_target: Optional[float] = None,
+    plot: bool = False,
 ) -> Dict[str, Any]:
 
     gps = get_event_gps(event, params)
@@ -300,11 +406,21 @@ def analyze_event(
         n0 = float(tsH.t0.value)
         n1 = n0 + 200.0
 
-    noiseH = tsH.crop(n0, n1).value
-    noiseL = tsL.crop(n0, n1).value
+    # ---- 1) PSD sur une fenetre de bruit "sure" ----
+    noiseH = np.asarray(tsH.crop(n0, n1).value, float)
+    noiseL = np.asarray(tsL.crop(n0, n1).value, float)
 
-    f_psd, S1 = psd_welch_median(np.asarray(noiseH, float), fs, fmin=flow, fmax=fhigh)
-    _, S2 = psd_welch_median(np.asarray(noiseL, float), fs, fmin=flow, fmax=fhigh)
+    # GWOSC peut contenir NaN/Inf -> on neutralise avant PSD
+    noiseH = np.nan_to_num(noiseH, nan=0.0, posinf=0.0, neginf=0.0)
+    noiseL = np.nan_to_num(noiseL, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # PSD par detecteur (Welch median robuste)
+    f_psd_H, S1 = psd_welch_median(noiseH, fs, fmin=flow, fmax=fhigh)
+    f_psd_L, S2 = psd_welch_median(noiseL, fs, fmin=flow, fmax=fhigh)
+
+    # Sanitize: PSD finie et strictement > 0 pour whitening
+    f_psd_H, S1 = sanitize_psd(f_psd_H, S1, name="PSD_H1")
+    f_psd_L, S2 = sanitize_psd(f_psd_L, S2, name="PSD_L1")
 
     # ---- 2) tau (sur tau-band) ----
     tb0, tb1 = bands.tau_band
@@ -345,13 +461,9 @@ def analyze_event(
             f"peak_meas={meas:.3e} -> target={hpeak_target:.3e} => H_STAR={hstar:.6g}"
         )
 
-        # IMPORTANT : on s'arrête ici si on est en mode calibration pure
-        return {
-            "event": event,
-            "H_STAR": hstar,
-        }
 
     # applique H_STAR (gain) avant tout
+    print("[DEBUG]:", hstar, flush=True)  # ← Force l'écriture immédiate
     hH = hH_raw * hstar
     hL = hL_raw * hstar
 
@@ -377,22 +489,88 @@ def analyze_event(
     f = np.fft.rfftfreq(N, d=1.0 / fs).astype(np.float64)
 
     mask = (f >= flow) & (f <= min(fhigh, 0.95 * (0.5 * fs)))
+    if not np.any(mask):
+        raise RuntimeError(
+            f"[FATAL] Bande vide apres masque: flow={flow} fhigh={fhigh} fs={fs} event={event}"
+        )
     f_use = f[mask]
     H1 = H1[mask]
     H2 = H2[mask]
 
-    S1i = np.interp(f_use, f_psd, S1).astype(np.float64)
-    S2i = np.interp(f_use, f_psd, S2).astype(np.float64)
+    S1i = np.interp(f_use, f_psd_H, S1).astype(np.float64)
+    S2i = np.interp(f_use, f_psd_L, S2).astype(np.float64)
+
+    # garde-fou final
+    S1i = np.nan_to_num(S1i, nan=1e-44, posinf=1e-44, neginf=1e-44)
+    S2i = np.nan_to_num(S2i, nan=1e-44, posinf=1e-44, neginf=1e-44)
+    S1i = np.maximum(S1i, 1e-60)
+    S2i = np.maximum(S2i, 1e-60)
 
     phi = (2.0 * np.pi * f_use * tau_hl).astype(np.float64)
     r = float(distance_mpc) * Mpc
 
-    dEdf = coherent_energy_numba(H1, H2, S1i, S2i, phi, f_use, r)
+    # ---- 6b) Energie L2 pondérée (whitened, cohérente) ----
+    eps = 1e-60
+    S1i = np.maximum(S1i, eps)
+    S2i = np.maximum(S2i, eps)
+
+    Hw1 = H1 / np.sqrt(S1i)
+    Hw2 = H2 / np.sqrt(S2i)
+
+    bad1 = ~np.isfinite(Hw1)
+    bad2 = ~np.isfinite(Hw2)
+
+    if np.any(bad1) and not np.any(bad2):
+        Hw1 = np.zeros_like(Hw1)     # L1-only
+    elif np.any(bad2) and not np.any(bad1):
+        Hw2 = np.zeros_like(Hw2)     # H1-only
+
+    # somme cohérente (phasage via tau_hl)
+    Hc = Hw1 + Hw2 * np.exp(-1j * phi)
+
+    # ψ(f) : taper doux pour éviter les bords (10% de la bande)
+    bw = max(1e-9, float(f_use[-1] - f_use[0]))
+    edge = min(20.0, 0.10 * bw)   # max 20 Hz de taper
+    edge = max(edge, 2.0)         # min 2 Hz pour éviter edge ~ 0
+
+    w = np.ones_like(f_use, dtype=np.float64)
+
+    lo = f_use < (f_use[0] + edge)
+    hi = f_use > (f_use[-1] - edge)
+
+    w[lo] = 0.5 - 0.5 * np.cos(np.pi * (f_use[lo] - f_use[0]) / edge)
+    w[hi] = 0.5 - 0.5 * np.cos(np.pi * (f_use[-1] - f_use[hi]) / edge)
+
+    psi2 = w * w
+
+    dEdf = (np.abs(Hc) ** 2) * psi2
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
-
     E_internal = float(trapezoid(dEdf, f_use))
+    if not np.isfinite(E_internal) or E_internal <= 0.0:
+        # debug minimal mais ultra utile
+        print(
+            f"[WARN] E_internal<=0 pour {event}: "
+            f"minS1={S1i.min():.3e} minS2={S2i.min():.3e} "
+            f"sum|H1|={np.sum(np.abs(H1)):.3e} sum|H2|={np.sum(np.abs(H2)):.3e} "
+            f"sum dEdf={np.sum(dEdf):.3e}",
+            flush=True
+        )
 
-    # ---- 7) calibration SCALE_EJ event B ----
+
+        # ---- 6b) largeur spectrale (feature manquante) ----
+    if E_internal <= 0.0 or not np.any(dEdf > 0):
+        bw_all = bw_nu = {"dnu_80": 0.0, "sigma_f": 0.0, "f10": 0.0, "f90": 0.0}
+    else:
+        bw_all = spectral_bandwidth_features(f_use, dEdf)
+    # nu-band mask (défini UNE fois, réutilisé ensuite)
+    nb0, nb1 = bands.nu_band
+    mask_nu = (f_use >= nb0) & (f_use <= nb1)
+
+    bw_nu = spectral_bandwidth_features(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else {
+        "f10": np.nan, "f50": np.nan, "f90": np.nan,
+        "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan
+    }
+
     # ---- 7) calibration SCALE_EJ event B ----
     scale_ej = float(scale_ej_in)
 
@@ -418,22 +596,16 @@ def analyze_event(
             f"SCALE_EJ={scale_ej:.6g}"
         )
 
-        # IMPORTANT : arrêt ici en mode calibration
-        return {
-            "event": event,
-            "SCALE_EJ": float(scale_ej),
-        }
-
     E_total = float(E_internal * scale_ej)
     m_sun_val = float(E_total / (M_sun * c * c))
 
     # ---- 8) nu_eff sur nu-band ----
-    nb0, nb1 = bands.nu_band
-    mask_nu = (f_use >= nb0) & (f_use <= nb1)
     nu_eff = nu_eff_energy(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else 0.0
     nu_eff_raw = nu_eff_energy(f_use, dEdf)
 
     out = {
+        "bw_all": bw_all,
+        "bw_nu": bw_nu,
         "event": event,
         "gps": float(gps),
         "distance_mpc": float(distance_mpc),
@@ -470,6 +642,10 @@ def analyze_event(
     print(f"Energie intrins. (J): {E_total:.3e}  ({m_sun_val:.6f} M_sun)")
     print(f"nu_eff (energy): {nu_eff:.2f} Hz (raw: {nu_eff_raw:.2f} Hz)")
     print(f"[DEBUG] flow={flow} fhigh={fhigh}")
+    print(f"[BW] all: dnu_80={bw_all['dnu_80']:.2f} Hz  sigma_f={bw_all['sigma_f']:.2f} Hz  "
+          f"f10={bw_all['f10']:.1f} f90={bw_all['f90']:.1f}")
+    print(f"[BW] nu : dnu_80={bw_nu['dnu_80']:.2f} Hz  sigma_f={bw_nu['sigma_f']:.2f} Hz  "
+          f"f10={bw_nu['f10']:.1f} f90={bw_nu['f90']:.1f}")
     if plot:
         import matplotlib.pyplot as plt
         os.makedirs("plots", exist_ok=True)
