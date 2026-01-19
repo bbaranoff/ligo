@@ -3,140 +3,329 @@
     "nu_eff": 150.0,
     "tau": -0.0069,
     "msun_c2": 3.0,
-    "energy_J": 5.3e47,
-    "notes": "Premier signal d'ondes gravitationnelles détecté"
+    "energy_J": 5.3e+47,
+    "notes": "Premier signal d'ondes gravitationnelles détecté",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW150914/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW150914/v4/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW151226": {
     "nu_eff": 445.0,
     "tau": -0.0027,
     "msun_c2": 1.0,
-    "energy_J": 1.8e47,
-    "notes": "Énergie corrigée"
+    "energy_J": 1.8e+47,
+    "notes": "Énergie corrigée",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW151226/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW151226/v3/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170104": {
     "nu_eff": 110.0,
     "tau": -0.003,
     "msun_c2": 2.0,
-    "energy_J": 3.5e47,
-    "notes": "Masse et énergie ajustées"
+    "energy_J": 3.5e+47,
+    "notes": "Masse et énergie ajustées",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170104/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170104/v3/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170608": {
     "nu_eff": 30.0,
     "tau": -0.004,
     "msun_c2": 0.9,
-    "energy_J": 1.6e47,
-    "notes": "Plus petite masse de trou noir stellaire, énergie corrigée"
+    "energy_J": 1.6e+47,
+    "notes": "Plus petite masse de trou noir stellaire, énergie corrigée",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170608/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170608/v4/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170729": {
     "nu_eff": 130.0,
     "tau": -0.006,
     "msun_c2": 4.8,
-    "energy_J": 8.5e47,
-    "notes": "Système le plus massif d'O2, énergie corrigée"
+    "energy_J": 8.5e+47,
+    "notes": "Système le plus massif d'O2, énergie corrigée",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170729/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170729/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170809": {
     "nu_eff": 200.0,
     "tau": -0.007,
     "msun_c2": 2.7,
-    "energy_J": 4.8e47,
-    "notes": "Énergie corrigée"
+    "energy_J": 4.8e+47,
+    "notes": "Énergie corrigée",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170809/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170809/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170814": {
     "nu_eff": 170.0,
     "tau": -0.006,
     "msun_c2": 2.7,
-    "energy_J": 4.8e47,
-    "notes": "Détection à trois détecteurs (LIGO+Virgo)"
+    "energy_J": 4.8e+47,
+    "notes": "Détection à trois détecteurs (LIGO+Virgo)",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170814/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170814/v4/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW170817": {
     "nu_eff": 80.0,
     "tau": 0.0,
     "msun_c2": 0.025,
-    "energy_J": 4.4e46,
-    "notes": "Fusion d'étoiles à neutrons, avec contrepartie électromagnétique"
+    "energy_J": 4.4e+46,
+    "notes": "Fusion d'étoiles à neutrons, avec contrepartie électromagnétique",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-1-confident/GW170817/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-1-confident/GW170817/v3/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190403_051519": {
     "nu_eff": 180.0,
     "tau": -0.006,
     "msun_c2": 1.8,
-    "energy_J": 3.2e47,
-    "notes": "O3a"
+    "energy_J": 3.2e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190403_051519/v1/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190403_051519/v1/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190412": {
     "nu_eff": 150.0,
     "tau": -0.006,
     "msun_c2": 1.7,
-    "energy_J": 3.0e47,
-    "notes": "Rapport de masse asymétrique significatif"
+    "energy_J": 3e+47,
+    "notes": "Rapport de masse asymétrique significatif",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190412/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190412/v4/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190413_052954": {
     "nu_eff": 170.0,
     "tau": -0.007,
     "msun_c2": 1.3,
-    "energy_J": 2.3e47,
-    "notes": "O3a"
+    "energy_J": 2.3e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190413_052954/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190413_052954/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190413_134308": {
     "nu_eff": 175.0,
     "tau": -0.007,
     "msun_c2": 1.4,
-    "energy_J": 2.5e47,
-    "notes": "O3a"
+    "energy_J": 2.5e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190413_134308/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190413_134308/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190421_213856": {
     "nu_eff": 160.0,
     "tau": -0.008,
     "msun_c2": 1.6,
-    "energy_J": 2.8e47,
-    "notes": "O3a"
+    "energy_J": 2.8e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190421_213856/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190421_213856/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190503_185404": {
     "nu_eff": 200.0,
     "tau": -0.007,
     "msun_c2": 2.6,
-    "energy_J": 4.6e47,
-    "notes": "O3a"
+    "energy_J": 4.6e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190503_185404/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190503_185404/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190514_065416": {
     "nu_eff": 210.0,
     "tau": -0.006,
     "msun_c2": 2.2,
-    "energy_J": 3.9e47,
-    "notes": "O3a"
+    "energy_J": 3.9e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190514_065416/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190514_065416/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190517_055101": {
     "nu_eff": 195.0,
     "tau": -0.007,
     "msun_c2": 2.0,
-    "energy_J": 3.5e47,
-    "notes": "O3a"
+    "energy_J": 3.5e+47,
+    "notes": "O3a",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190517_055101/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190517_055101/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190519_153544": {
     "nu_eff": 140.0,
     "tau": -0.009,
     "msun_c2": 2.1,
-    "energy_J": 3.7e47,
-    "notes": "O3a, énergie corrigée"
+    "energy_J": 3.7e+47,
+    "notes": "O3a, énergie corrigée",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190519_153544/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190519_153544/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190521": {
     "nu_eff": 70.0,
     "tau": -0.005,
     "msun_c2": 7.0,
-    "energy_J": 1.2e48,
-    "notes": "Trous noirs de masse intermédiaire, masse finale ~142 Msun"
+    "energy_J": 1.2e+48,
+    "notes": "Trous noirs de masse intermédiaire, masse finale ~142 Msun",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190521/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190521/v4/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190828_063405": {
     "nu_eff": 180.0,
     "tau": -0.008,
     "msun_c2": 1.9,
-    "energy_J": 3.4e47,
-    "notes": "O3b"
+    "energy_J": 3.4e+47,
+    "notes": "O3b",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/IAS-O3a/GW190828_063405/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/IAS-O3a/GW190828_063405/v2/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
   },
   "GW190828_065509": {
     "nu_eff": 190.0,
     "tau": -0.008,
     "msun_c2": 2.1,
-    "energy_J": 3.7e47,
-    "notes": "O3b"
+    "energy_J": 3.7e+47,
+    "notes": "O3b",
+    "sources": {
+      "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/IAS-O3a/GW190828_065509/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/IAS-O3a/GW190828_065509/v3/",
+      "catalog_paper_gwtc1": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0"
+    },
+    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)"
+  },
+  "_meta": {
+    "note": "These are comparison/reference numbers for your table (nu_LIGO, tau_LIGO, Msun*c^2, etc.). For rigorous parameter values and uncertainties, use the GWOSC event JSON posteriors.",
+    "sources": {
+      "gwtc1_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "gwtc2_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053",
+      "gwtc21_table": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "query_lastver_page5": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0"
+    }
   }
 }

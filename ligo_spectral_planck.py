@@ -1,766 +1,590 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
+"""Analyse spectrale coherente GWOSC (H1-L1, V1 optionnel)
+
+Sorties
+- dEdf_internal: spectre interne (avant SCALE_EJ)
+- E_total_J = SCALE_EJ * integral(dE/df)
+- m_sun = E_total_J / (M_sun*c^2)
+- tau_hl_s: delay H1-L1 estime par correlation sur une bande dediee (tau-band)
+- nu_eff_energy: barycentre energetique sur une bande dediee (nu-band), avec garde-fous
+
+Calibration double (non degeneree)
+- H_STAR via amplitude: calibrer sur un event A en imposant un peak_ref (quantile)
+- SCALE_EJ via energie: calibrer sur un event B en imposant une energie cible (en M_sun c^2)
+
+Important: H_STAR et SCALE_EJ ne doivent pas etre calibres sur le meme event (sinon degenerescence).
+
+Dependances: numpy, scipy, gwpy, gwosc, numba (optionnel)
 """
-Analyse cohérente LIGO H1–L1 (GWOSC)
-------------------------------------
-- Calibration h★ fixe (=1) avec renfort pseudo-SNR.
-- Fenêtre de bruit sécurisée.
-- Lissage log-log du spectre d'énergie.
-- Énergie effective normalisée (indépendante de la distance après correction).
-"""
-from numba import njit
-from scipy.signal.windows import dpss
-import argparse, os, json
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+from dataclasses import dataclass
+from typing import Dict, Any, Optional, Tuple
+
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.signal import butter, sosfiltfilt
 from scipy.signal.windows import tukey
 from scipy.ndimage import gaussian_filter1d
+from scipy.integrate import trapezoid
+
 from gwosc import datasets
 from gwpy.timeseries import TimeSeries
-from scipy.integrate import trapezoid
-# ==========================
-# Constantes physiques
-# ==========================
+
+try:
+    from numba import njit
+except Exception:  # pragma: no cover
+    def njit(*args, **kwargs):
+        def deco(fn):
+            return fn
+        return deco
+
+# ------------------
+# Constantes
+# ------------------
 c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
-SCALE_EJ = 8e-12
-H_STAR = 1
-# ==========================
-# Utilitaires
-# ==========================
-def load_event_params():
-    path = os.path.join(os.path.dirname(__file__), "event_params.json")
-    print("[DEBUG] Chargement JSON depuis :", path)
+
+DEFAULT_HSTAR = 1.0
+DEFAULT_SCALE_EJ = 8e-12
+
+# ------------------
+# IO params
+# ------------------
+
+def load_event_params(path: str) -> Dict[str, Any]:
     with open(path, "r") as f:
         return json.load(f)
 
-EVENT_PARAMS = load_event_params()
 
-def fetch(det, t0, t1, outdir="data") -> TimeSeries:
-    os.makedirs(outdir, exist_ok=True)
-    return TimeSeries.fetch_open_data(det, t0, t1, cache=False)
-def nu_eff_energy(f, dEdf):
+# Module-level default params for compatibility with helper scripts (e.g. run_all.sh)
+def _load_default_event_params() -> Dict[str, Any]:
+    """Best-effort load of event_params.json next to this script.
+
+    Some helper scripts import this module and expect a preloaded
+    EVENT_PARAMS dictionary. The main() still supports --event-params;
+    this is only a convenience fallback.
     """
-    Fréquence effective officielle :
-    ν_eff = ∫ f (dE/df) df / ∫ (dE/df) df
-    """
-    num = trapezoid(f * dEdf, f)
-    den = trapezoid(dEdf, f)
-    return num / den if den > 0 else 0.0
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        p = os.path.join(here, "event_params.json")
+        if os.path.exists(p):
+            return load_event_params(p)
+    except Exception:
+        pass
+    return {}
 
 
-def nu_mean_simple(f):
-    """
-    Moyenne arithmétique des fréquences.
-    """
-    return float(np.mean(f))
+EVENT_PARAMS: Dict[str, Any] = _load_default_event_params()
 
 
-def nu_rms(f):
-    """
-    Moyenne quadratique (root-mean-square).
-    """
-    return float(np.sqrt(np.mean(f * f)))
+def get_event_gps(event: str, params: Dict[str, Any]) -> float:
+    evp = params.get(event, {})
+    if isinstance(evp, dict):
+        if "gps" in evp:
+            return float(evp["gps"])
+        if "GPS" in evp:
+            return float(evp["GPS"])
+    # fallback GWOSC
+    return float(datasets.event_gps(event))
 
 
-def nu_eff_heuristic(f):
-    """
-    Ton intuition :
-        ν_eff ≈ sqrt(2 × moyenne_simple)
-    """
-    nu_m = np.mean(f)
-    return float(np.sqrt(2.0 * nu_m))
+def fetch(det: str, t0: float, t1: float, cache: bool = True) -> TimeSeries:
+    # gwpy: open data
+    return TimeSeries.fetch_open_data(det, t0, t1, cache=cache)
 
 
-def compute_all_nu(f, dEdf):
-    """
-    Retourne un dict contenant toutes les fréquences 'effectives' utiles.
-    """
-    return {
-        "nu_eff_energy":     nu_eff_energy(f, dEdf),
-        "nu_mean_simple":    nu_mean_simple(f),
-        "nu_rms":            nu_rms(f),
-        "nu_eff_heuristic":  nu_eff_heuristic(f),
-    }
+# ------------------
+# Utils
+# ------------------
 
-def fetch(det, t0, t1, outdir="data") -> TimeSeries:
-    os.makedirs(outdir, exist_ok=True)
-    return TimeSeries.fetch_open_data(det, t0, t1, cache=True)
+def robust_peak(x: np.ndarray, q: float = 99.5) -> float:
+    x = np.asarray(x, float)
+    if x.size == 0:
+        return 0.0
+    return float(np.percentile(np.abs(x), q))
 
-def safe_bandpass(x, fs, f1, f2, order=4):
+
+def safe_bandpass(x: np.ndarray, fs: float, f1: float, f2: float, order: int = 4) -> np.ndarray:
+    x = np.asarray(x, float)
     nyq = 0.5 * fs
-    f2_safe = min(f2, 0.95 * nyq)
-    if f2_safe <= f1:
-        f2_safe = f1 + 10.0
+    f2_safe = min(float(f2), 0.95 * nyq)
+    f1_safe = max(float(f1), 0.1)
+    if f2_safe <= f1_safe:
+        f2_safe = min(0.95 * nyq, f1_safe + 10.0)
+    sos = butter(order, [f1_safe, f2_safe], btype="bandpass", fs=fs, output="sos")
+    y = sosfiltfilt(sos, x)
+    # fenetre douce
+    win = tukey(len(y), 0.05)
+    return y * win
 
-    sos = butter(order, [f1, f2_safe], btype="bandpass", fs=fs, output="sos")
-    xf = sosfiltfilt(sos, x)
 
-    # fenêtre douce = seulement 5%
-    N = len(xf)
-    win = tukey(N, 0.05)
-
-    return xf * win
-
-def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
-    from numpy.fft import rfft, rfftfreq
-    x = np.asarray(ts.value, float)
-    fs = ts.sample_rate.value
-    fmax = min(fmax, 0.95 * (0.5 * fs))
+def psd_welch_median(x: np.ndarray, fs: float, seglen: float = 4.0, overlap: float = 2.0,
+                    fmin: float = 10.0, fmax: float = 1024.0) -> Tuple[np.ndarray, np.ndarray]:
+    """PSD robuste par mediane de Welch (fenetre Tukey)."""
+    x = np.asarray(x, float)
     nseg = int(seglen * fs)
     nhop = int((seglen - overlap) * fs)
-    win = np.hanning(nseg)
-    U = (win ** 2).sum()
+    if nseg < 16 or nhop < 1 or x.size < nseg:
+        # fallback simple
+        nseg = min(x.size, max(256, int(1.0 * fs)))
+        nhop = max(1, nseg // 2)
+
+    win = tukey(nseg, 0.25)
+    U = float((win ** 2).sum())
+
     specs = []
     for i in range(0, x.size - nseg + 1, nhop):
-        seg = safe_bandpass(x[i:i + nseg], fs, fmin, fmax)
-        Xk = rfft(seg * win)
-        Pxx = (2.0 / (fs * U)) * np.abs(Xk) ** 2
+        seg = x[i:i + nseg]
+        seg = safe_bandpass(seg, fs, fmin, fmax)
+        X = np.fft.rfft(seg * win)
+        Pxx = (2.0 / (fs * U)) * (np.abs(X) ** 2)
         specs.append(Pxx)
-    S = np.median(np.stack(specs), axis=0)
-    f = rfftfreq(nseg, d=1.0 / fs)
+
+    if not specs:
+        f = np.fft.rfftfreq(nseg, d=1.0 / fs)
+        return f, np.ones_like(f) * 1e-44
+
+    S = np.median(np.stack(specs, axis=0), axis=0)
+    f = np.fft.rfftfreq(nseg, d=1.0 / fs)
+
+    # securite
+    S = np.maximum(S, 1e-60)
     return f, S
 
-def estimate_delay_time(h1, h2, fs, max_delay_ms=15.0):
-    N = min(len(h1), len(h2))
-    x = h1[:N] - np.mean(h1[:N])
-    y = h2[:N] - np.mean(h2[:N])
 
-    X = np.fft.rfft(x, n=2*N)
-    Y = np.fft.rfft(y, n=2*N)
-    R = Y * np.conj(X)
+def estimate_delay_time(x: np.ndarray, y: np.ndarray, fs: float, max_delay_ms: float = 15.0) -> float:
+    """Cross-correlation FFT, renvoie le lag (s) max abs corr. """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    N = min(x.size, y.size)
+    if N < 8:
+        return 0.0
+    x = x[:N] - np.mean(x[:N])
+    y = y[:N] - np.mean(y[:N])
 
-    r = np.fft.irfft(R)
-    r = np.fft.fftshift(r)
+    nfft = 1
+    while nfft < 2 * N:
+        nfft *= 2
 
-    lags = np.arange(-N, N) / fs
-    lim = max_delay_ms * 1e-3
-    m = np.abs(lags) <= lim
+    X = np.fft.rfft(x, n=nfft)
+    Y = np.fft.rfft(y, n=nfft)
+    R = X * np.conj(Y)
+    r = np.fft.irfft(R, n=nfft)
 
-    i = np.argmax(np.abs(r[m]))
-    return float(lags[m][i])
+    # rearrange lags to [-N..N]
+    r = np.concatenate([r[-(N-1):], r[:N]])
+    lags = np.arange(-(N-1), N) / fs
 
-def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
-    """
-    τ géométrique robuste : max de corrélation sur la zone du chirp.
-    """
+    lim = float(max_delay_ms) / 1000.0
+    mask = (lags >= -lim) & (lags <= lim)
+    if not np.any(mask):
+        return 0.0
 
-    # --- 1) segment très court centré sur le merge (~40 ms) ---
-    segH = tsH.crop(gps - 0.03, gps + 0.01)
-    segL = tsL.crop(gps - 0.03, gps + 0.01)
+    idx = np.argmax(np.abs(r[mask]))
+    lag = lags[mask][idx]
+    return float(lag)
 
-    hH_raw = np.asarray(segH.value, float)
-    hL_raw = np.asarray(segL.value, float)
 
-    # --- 2) version filtrée ---
-    hH_f = safe_bandpass(hH_raw, fs, flow, fhigh)
-    hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
+def nu_eff_energy(f: np.ndarray, dEdf: np.ndarray) -> float:
+    """nu_eff = int f dEdf / int dEdf, garde-fous den>0."""
+    f = np.asarray(f, float)
+    w = np.maximum(np.asarray(dEdf, float), 0.0)
+    den = float(trapezoid(w, f))
+    if (not np.isfinite(den)) or den <= 0.0:
+        return 0.0
+    num = float(trapezoid(f * w, f))
+    if not np.isfinite(num):
+        return 0.0
+    nu = num / den
+    return float(nu) if np.isfinite(nu) else 0.0
 
-    # --- 3) cross-corr brute + filtrée ---
-    tau = estimate_delay_time(hH_f, hL_f, fs)
-    return -abss(float(tau))
 
 @njit(cache=True, fastmath=True)
 def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
     n = H1.shape[0]
-    dEdf = np.empty(n, dtype=np.float64)
-    eps = 1e-22
-
-    for i in range(n):
-
-        # PSD sécurisées
-        s1 = S1[i] if S1[i] > eps else eps
-        s2 = S2[i] if S2[i] > eps else eps
-
-        w1 = 1.0 / s1
-        w2 = 1.0 / s2
-
-        # phase propre
-        ph = phi[i] if not np.isnan(phi[i]) else 0.0
-        c = np.cos(ph)
-        s = np.sin(ph)
-        eiphi = c + 1j*s
-
-        # MOYENNE COHÉRENTE CORRECTE
-        num = H1[i] * w1 + eiphi * H2[i] * w2
-        den = w1 + w2 + eps
-
-        Hc = num / den
-
-        # énergie GR
-        dEdf[i] = (r*r) * (f[i]*f[i]) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
-
-    return dEdf, tau
-
-# ==========================
-# ANALYSE SPECTRALE — VERSION CORRIGÉE
-# ==========================
-def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
-                              event_name="", flow=20.0, fhigh=350.0,
-                              noise_pad=50.0, signal_win=1.2, plot=False):
-
-    fs = tsH.sample_rate.value
-
-    # -------------------------------------------------------
-    # 1) PSD — zone de bruit robuste
-    # -------------------------------------------------------
-    start = tsH.t0.value
-    try:
-        if gps - noise_pad - 400 < start:
-            n0, n1 = start, start + 200
-        else:
-            n0, n1 = gps - noise_pad - 400, gps - noise_pad - 200
-        noiseH = tsH.crop(n0, n1)
-        noiseL = tsL.crop(n0, n1)
-    except:
-        noiseH = tsH.crop(gps - 1000, gps - 800)
-        noiseL = tsL.crop(gps - 1000, gps - 800)
-
-    fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
-    fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
-
-    # -------------------------------------------------------
-    # 2) Estimation du délai initial (NON filtré !)
-    # -------------------------------------------------------
-    segH = tsH.crop(gps - 0.2, gps + 0.2)
-    segL = tsL.crop(gps - 0.2, gps + 0.2)
-
-    # >>> signaux bruts pour la corrélation <<< 
-    hH_delay = np.asarray(segH.value, float)
-    hL_delay = np.asarray(segL.value, float)
-
-    hH = safe_bandpass(hH_delay, fs, flow, fhigh)
-    hL = safe_bandpass(hL_delay, fs, flow, fhigh)
-    # Corrélation avec bon signe
-    tau = coherent_energy_numba(H1, H2, S1, S2, phi, f, r)
-
-
-    # -------------------------------------------------------
-    # 3) Extraction du signal utile
-    # -------------------------------------------------------
-    # ====== recentrage automatique du pic ======
-    # détecte le vrai chirp = max de fréquence instantanée (pas amplitude)
-    # --- Ajustement spécial GW170608 ---
-
-    peakH1 = np.max(np.abs(hH))
-    peakL1 = np.max(np.abs(hL))
-    peak = max(peakH1, peakL1)
-
-    if peak > 0:
-        hH = hH / peakH1 * H_STAR
-        hL = hL / peakL1 * H_STAR
-
-    # -------------------------------------------------------
-    # 4) FFT courte
-    # -------------------------------------------------------
-    N = min(len(hH), len(hL))
-    w = tukey(N, 0.2)
-    H1 = np.fft.rfft(hH * w)
-    H2 = np.fft.rfft(hL * w)
-    f  = np.fft.rfftfreq(N, 1/fs)
-
-    # -------------------------------------------------------
-    # 5) Spectre d'énergie cohérent (version correcte)
-    # -------------------------------------------------------
-    # Phase cohérente entre H1 et H2 (retard tau)
-    phi = 2 * np.pi * f
-    # Combinaison cohérente pondérée par PSD
+    out = np.empty(n, dtype=np.float64)
     eps = 1e-30
-    r = distance_mpc * Mpc
-    # Version compilée Numba (15× plus rapide)
-    dEdf = coherent_energy_numba(H1, H2, S1, S2, phi, f, r)
-
-    nu_eff = compute_all_nu(f, dEdf)
-    E = float(trapezoid(dEdf, f)) * SCALE_EJ
-    m_sun = E / (M_sun * c**2)
-    # -------------------------------------------------------
-    os.makedirs("results", exist_ok=True)
-
-
-    out_json = {
-        "event": event_name,
-        "distance_mpc": float(distance_mpc),
-        "freq_Hz": g.tolist(),
-        "dEdf_J_Hz": dEdf.tolist(),
-        "E_total_J": float(E),
-        "m_sun": float(m_sun),
-        "nu_eff": compute_all_nu(f, dEdf),
-        "tau_s": float(tau),
-        "flow_Hz": float(flow),
-        "fhigh_Hz": float(fhigh)
-    }
-    with open(f"results/{event_name}.json", "w") as fj:
-        json.dump(out_json, fj, indent=2)
-    print(f"\n=== ANALYSE SPECTRALE {event_name} ===")
-    print(f"Distance: {distance_mpc} Mpc")
-    print(f"Énergie intrinsèque: {E:.3e} J ({m_sun:.3f} M☉)")
-    print(f"Fréquence effective: {nu_eff:.1f} Hz")
-    print(f"Référence d'amplitude: h★={H_STAR:.2e}")
-
-    if plot:
-        plt.figure(figsize=(10, 6))
-        plt.loglog(g, dEdf, lw=1.5, 
-                  label=f"{event_name} (E={E:.2e} J, ν_eff={nu_eff:.1f} Hz, d={distance_mpc} Mpc)")
-
-        f_log = np.geomspace(g[0], g[-1], 500)
-        dEdf_log = np.interp(f_log, g, dEdf)
-        log_smooth = gaussian_filter1d(np.log10(np.maximum(dEdf_log, 1e-50)), sigma=2)
-
-        plt.loglog(f_log, 10**log_smooth, '--', lw=1, color='orange', alpha=0.7, label=f"{event_name} (lissé)")
-        plt.xlabel("Fréquence (Hz)", fontsize=12)
-        plt.ylabel("dE/df (J/Hz)", fontsize=12)
-        plt.title(f"Spectre d'énergie gravitationnelle intrinsèque\n{event_name} — h★={H_STAR:.2e}, d={distance_mpc} Mpc", fontsize=14)
-        plt.grid(True, which="both", alpha=0.3, linestyle='--')
-        plt.legend(fontsize=10)
-        plt.xlim(g[0], g[-1])
-        plt.ylim(auto=True)
-
-        plt.axvline(x=nu_eff, color='red', linestyle=':', linewidth=1, label=f"ν_eff = {nu_eff:.1f} Hz")
-
-        os.makedirs("plots", exist_ok=True)
-        plt.savefig(f"plots/{event_name}_spectre.png", dpi=200, bbox_inches='tight')
-        plt.show()
-
-    return {"E_total": E, "m_sun": m_sun, "nu_eff": nu_eff, "distance_mpc": distance_mpc}
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Analyse cohérente LIGO H1–L1 (GWOSC)
-------------------------------------
-- Calibration h★ fixe (=1) avec renfort pseudo-SNR.
-- Fenêtre de bruit sécurisée.
-- Lissage log-log du spectre d'énergie.
-- Énergie effective normalisée (indépendante de la distance après correction).
-"""
-from numba import njit
-from scipy.signal.windows import dpss
-import argparse, os, json
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.signal import butter, sosfiltfilt
-from scipy.signal.windows import tukey
-from scipy.ndimage import gaussian_filter1d
-from gwosc import datasets
-from gwpy.timeseries import TimeSeries
-from scipy.integrate import trapezoid
-# ==========================
-# Constantes physiques
-# ==========================
-c = 299792458.0
-M_sun = 1.98847e30
-Mpc = 3.085677581491367e22
-SCALE_EJ = 8e-12
-H_STAR = 1
-# ==========================
-# Utilitaires
-# ==========================
-def load_event_params():
-    path = os.path.join(os.path.dirname(__file__), "event_params.json")
-    print("[DEBUG] Chargement JSON depuis :", path)
-    with open(path, "r") as f:
-        return json.load(f)
-
-EVENT_PARAMS = load_event_params()
-
-def fetch(det, t0, t1, outdir="data") -> TimeSeries:
-    os.makedirs(outdir, exist_ok=True)
-    return TimeSeries.fetch_open_data(det, t0, t1, cache=True)
-
-def safe_bandpass(x, fs, f1, f2, order=4):
-    nyq = 0.5 * fs
-    f2_safe = min(f2, 0.95 * nyq)
-    if f2_safe <= f1:
-        f2_safe = f1 + 10.0
-
-    sos = butter(order, [f1, f2_safe], btype="bandpass", fs=fs, output="sos")
-    xf = sosfiltfilt(sos, x)
-
-    # fenêtre douce = seulement 5%
-    N = len(xf)
-    win = tukey(N, 0.05)
-
-    return xf * win
-
-def psd_welch(ts, seglen=4.0, overlap=2.0, fmin=10.0, fmax=2048.0):
-    from numpy.fft import rfft, rfftfreq
-    x = np.asarray(ts.value, float)
-    fs = ts.sample_rate.value
-    fmax = min(fmax, 0.95 * (0.5 * fs))
-    nseg = int(seglen * fs)
-    nhop = int((seglen - overlap) * fs)
-    win = np.hanning(nseg)
-    U = (win ** 2).sum()
-    specs = []
-    for i in range(0, x.size - nseg + 1, nhop):
-        seg = safe_bandpass(x[i:i + nseg], fs, fmin, fmax)
-        Xk = rfft(seg * win)
-        Pxx = (2.0 / (fs * U)) * np.abs(Xk) ** 2
-        specs.append(Pxx)
-    S = np.median(np.stack(specs), axis=0)
-    f = rfftfreq(nseg, d=1.0 / fs)
-    return f, S
-
-def estimate_delay_time(h1, h2, fs, max_delay_ms=15.0):
-    N = min(len(h1), len(h2))
-    x = h1[:N] - np.mean(h1[:N])
-    y = h2[:N] - np.mean(h2[:N])
-
-    X = np.fft.rfft(x, n=2*N)
-    Y = np.fft.rfft(y, n=2*N)
-    R = Y * np.conj(X)
-
-    r = np.fft.irfft(R)
-    r = np.fft.fftshift(r)
-
-    lags = np.arange(-N, N) / fs
-    lim = max_delay_ms * 1e-3
-    m = np.abs(lags) <= lim
-
-    i = np.argmax(np.abs(r[m]))
-    return float(lags[m][i])
-
-def estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh):
-    """
-    τ géométrique robuste : max de corrélation sur la zone du chirp.
-    """
-
-    # --- 1) segment très court centré sur le merge (~40 ms) ---
-    segH = tsH.crop(gps - 0.03, gps + 0.01)
-    segL = tsL.crop(gps - 0.03, gps + 0.01)
-
-    hH_raw = np.asarray(segH.value, float)
-    hL_raw = np.asarray(segL.value, float)
-
-    # --- 2) version filtrée ---
-    hH_f = safe_bandpass(hH_raw, fs, flow, fhigh)
-    hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
-
-    # --- 3) cross-corr brute + filtrée ---
-    tau = estimate_delay_time(hH_f, hL_f, fs)
-    return -abs(float(tau))
-
-@njit(cache=True, fastmath=True)
-def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
-    n = H1.shape[0]
-    dEdf = np.empty(n, dtype=np.float64)
-    eps = 1e-22
-
     for i in range(n):
-
-        # PSD sécurisées
         s1 = S1[i] if S1[i] > eps else eps
         s2 = S2[i] if S2[i] > eps else eps
-
         w1 = 1.0 / s1
         w2 = 1.0 / s2
+        ph = phi[i]
+        c = math.cos(ph)
+        s = math.sin(ph)
+        # e^{i phi}
+        re = c
+        im = s
 
-        # phase propre
-        ph = phi[i] if not np.isnan(phi[i]) else 0.0
-        c = np.cos(ph)
-        s = np.sin(ph)
-        eiphi = c + 1j*s
+        # num = H1*w1 + e^{i phi} H2*w2
+        a = H1[i] * w1
+        b = H2[i] * w2
+        # e^{i phi} * b
+        br = b.real * re - b.imag * im
+        bi = b.real * im + b.imag * re
 
-        # MOYENNE COHÉRENTE CORRECTE
-        num = H1[i] * w1 + eiphi * H2[i] * w2
+        numr = a.real + br
+        numi = a.imag + bi
         den = w1 + w2 + eps
 
-        Hc = num / den
+        Hcr = numr / den
+        Hci = numi / den
 
-        # énergie GR
-        dEdf[i] = (r*r) * (f[i]*f[i]) * (Hc.real*Hc.real + Hc.imag*Hc.imag)
+        ff = f[i]
+        out[i] = (r * r) * (ff * ff) * (Hcr * Hcr + Hci * Hci)
 
-    return dEdf
+    return out
 
-# ==========================
-# ANALYSE SPECTRALE — VERSION CORRIGÉE
-# ==========================
-def analyze_coherent_spectral(tsH, tsL, gps, distance_mpc, V1=None,
-                              event_name="", flow=20.0, fhigh=350.0,
-                              noise_pad=50.0, signal_win=1.2, plot=False):
 
-    fs = tsH.sample_rate.value
+@dataclass
+class Bands:
+    tau_band: Tuple[float, float]
+    nu_band: Tuple[float, float]
 
-    use_virgo = (V1 is not None)
-    hV = None
-    H3 = None
-    S3 = None
 
-    # -------------------------------------------------------
-    # 1) PSD — zone de bruit robuste
-    # -------------------------------------------------------
-    start = tsH.t0.value
-    try:
-        if gps - noise_pad - 400 < start:
-            n0, n1 = start, start + 200
-        else:
-            n0, n1 = gps - noise_pad - 400, gps - noise_pad - 200
-        noiseH = tsH.crop(n0, n1)
-        noiseL = tsL.crop(n0, n1)
-    except:
-        noiseH = tsH.crop(gps - 1000, gps - 800)
-        noiseL = tsL.crop(gps - 1000, gps - 800)
+def analyze_event(
+    event: str,
+    params: Dict[str, Any],
+    flow: float,
+    fhigh: float,
+    signal_win: float,
+    noise_pad: float,
+    distance_mpc: float,
+    bands: Bands,
+    use_virgo: bool,
+    peak_norm: bool,
+    peak_quantile: float,
+    hstar_in: float,
+    scale_ej_in: float,
+    calibrate_hstar_event: Optional[str],
+    hpeak_target: Optional[float],
+    calibrate_scale_event: Optional[str],
+    msun_target: Optional[float],
+    plot: bool,
+) -> Dict[str, Any]:
 
-    fH, S1 = psd_welch(noiseH, fmin=flow, fmax=fhigh)
-    fL, S2 = psd_welch(noiseL, fmin=flow, fmax=fhigh)
-    if use_virgo and H3 is not None:
+    gps = get_event_gps(event, params)
+
+    # fetch window: bruit + marge
+    t0 = gps - max(1200.0, noise_pad + 450.0)
+    t1 = gps + max(200.0, noise_pad + 50.0)
+
+    print(f"\n\U0001F4E1 Telechargement des donnees H1/L1{'/V1' if use_virgo else ''} pour {event}...")
+    tsH = fetch("H1", t0, t1)
+    tsL = fetch("L1", t0, t1)
+
+    tsV = None
+    used = ["H1", "L1"]
+    if use_virgo:
         try:
-            fV, S3 = psd_welch(V1, fmin=flow, fmax=fhigh)
-            if not np.allclose(f_psd, fV):
-                S3 = np.interp(f_psd, fV, S3)
-        except Exception:
-            use_virgo = False
-            S3 = None
-        if not np.allclose(fH, fL):
-            S2 = np.interp(fH, fL, S2)
-    f_psd = fH
-    # -------------------------------------------------------
-    # 2) Estimation du délai initial (NON filtré !)
-    # -------------------------------------------------------
-    segH = tsH.crop(gps - 0.2, gps + 0.2)
-    segL = tsL.crop(gps - 0.2, gps + 0.2)
+            tsV = fetch("V1", t0, t1)
+            used.append("V1")
+        except Exception as e:
+            print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
+            tsV = None
 
-    # >>> signaux bruts pour la corrélation <<< 
-    hH_delay = np.asarray(segH.value, float)
-    hL_delay = np.asarray(segL.value, float)
+    fs = float(tsH.sample_rate.value)
 
-    # Corrélation avec bon signe
-    tau = estimate_tau_geo(tsH, tsL, gps, fs, flow, fhigh)
+    # ---- 1) PSD sur une fenetre de bruit "sure" ----
+    n0 = gps - noise_pad - 400.0
+    n1 = gps - noise_pad - 200.0
+    if n0 < float(tsH.t0.value):
+        n0 = float(tsH.t0.value)
+        n1 = n0 + 200.0
 
-    # -------------------------------------------------------
-    # 3) Extraction du signal utile
-    # -------------------------------------------------------
-    # ====== recentrage automatique du pic ======
-    # détecte le vrai chirp = max de fréquence instantanée (pas amplitude)
-    # --- Ajustement spécial GW170608 ---
-    """
-    if event_name == "GW170608":
-        # Fixe un merger court et propre
-        t_peak = gps + 0.01      # merger time
-        signal_win = 0.25         # 250 ms max
-    if event_name != "GW170608":
-    """
-    seg = tsH.crop(gps - 0.3, gps + 0.1)
-    h = np.asarray(seg.value, float)
-    dh = np.abs(np.diff(h))
-    imax = np.argmax(dh)
-    t_peak = seg.times.value[:-1][imax]
+    noiseH = tsH.crop(n0, n1).value
+    noiseL = tsL.crop(n0, n1).value
 
-    half = signal_win * 0.5
-    winH = tsH.crop(t_peak - half, t_peak + half)
-    winL = tsL.crop(t_peak - half, t_peak + half)
-    if use_virgo:
-            try:
-                winV = V1.crop(t_peak - half, t_peak + half)
-                hV = safe_bandpass(np.asarray(winV.value, float), fs, flow, fhigh)
+    f_psd, S1 = psd_welch_median(np.asarray(noiseH, float), fs, fmin=flow, fmax=fhigh)
+    _, S2 = psd_welch_median(np.asarray(noiseL, float), fs, fmin=flow, fmax=fhigh)
 
-                # normalisation comme H1/L1
-                if peak > 0:
-                    hV = hV / peak * H_STAR
+    # ---- 2) tau (sur tau-band) ----
+    tb0, tb1 = bands.tau_band
+    seg_tau_H = np.asarray(tsH.crop(gps - 0.2, gps + 0.2).value, float)
+    seg_tau_L = np.asarray(tsL.crop(gps - 0.2, gps + 0.2).value, float)
 
-            except Exception:
-                use_virgo = False
-                hV = None
-        
-    hH = safe_bandpass(np.asarray(winH.value, float), fs, flow, fhigh)
-    hL = safe_bandpass(np.asarray(winL.value, float), fs, flow, fhigh)
-    N = min(len(hH), len(hL))
-    w = tukey(N, 0.2)
-    peakH1 = np.max(np.abs(hH))
-    peakL1 = np.max(np.abs(hL))
-    peak = max(peakH1, peakL1)
+    x_tau = safe_bandpass(seg_tau_H, fs, tb0, tb1)
+    y_tau = safe_bandpass(seg_tau_L, fs, tb0, tb1)
+    tau_hl = estimate_delay_time(x_tau, y_tau, fs)
 
-    if peak > 0:
-        hH = hH / peak * H_STAR
-        hL = hL / peak * H_STAR
+    # convention: signe negatif comme dans tes runs (L arrive apres H => tau negatif)
+    # Ici: estimate_delay_time renvoie lag tel que x(t) ~ y(t+lag). On garde ton choix:
+    tau_hl = -abs(float(tau_hl))
 
-    # -------------------------------------------------------
-    # 4) FFT courte
-    # -------------------------------------------------------
-    H1 = np.fft.rfft(hH * w)
-    H2 = np.fft.rfft(hL * w)
-    if use_virgo and hV is not None:
-        H3 = np.fft.rfft(hV * w)
-    else:
-        H3 = None
-    if use_virgo:
-        if H3 is None or np.all(H3 == 0):
-            print("[WARN] Virgo désactivé : signal non exploitable")
-            use_virgo = False
-    f  = np.fft.rfftfreq(N, 1/fs)
+    # ---- 3) segment signal ----
+    s0 = gps - (signal_win / 2.0)
+    s1 = gps + (signal_win / 2.0)
+    hH_raw = np.asarray(tsH.crop(s0, s1).value, float)
+    hL_raw = np.asarray(tsL.crop(s0, s1).value, float)
 
-    # -------------------------------------------------------
-    # 5) Spectre d'énergie cohérent (version correcte)
-    # -------------------------------------------------------
+    # ---- 4) calibration H_STAR event A ----
+    hstar = float(hstar_in)
+    if calibrate_hstar_event and hpeak_target is not None and event == calibrate_hstar_event:
+        # peak ref sur L1 (plus stable); bande tau-band
+        hL_cal = safe_bandpass(hL_raw, fs, tb0, tb1)
+        meas = robust_peak(hL_cal, peak_quantile)
 
-    # Phase cohérente entre H1 et H2 (retard tau_guess)
-    phi = 2 * np.pi * f * tau
-    if use_virgo and hV is not None:
-        phi12 = phi
-        phi13 = phi  # on utilise même tau_guess pour V1, sinon incohérent
-    else:
-        phi12 = phi
-        phi13 = None
-    r = distance_mpc * Mpc
-    # Combinaison cohérente pondérée par PSD
-    eps = 1e-30
-    # Version compilée Numba (15× plus rapide)
-    if use_virgo and H3 is not None and S3 is not None:
-        phi12 = phi
-        phi13 = phi
-        dEdf = coherent_energy_numba_3(H1, H2, H3, S1, S2, S3, phi12, phi13, f, r)
-    else:
-        dEdf = coherent_energy_numba(H1, H2, S1, S2, phi, f, r)
-    dEdf = np.nan_to_num(dEdf)
+        if meas > 0 and np.isfinite(meas):
+            hstar = float(hpeak_target) / float(meas)
+        else:
+            hstar = float(hstar_in)
 
-    # Bande utile
-    mask = (f >= flow) & (f <= fhigh)
+        # >>> LIGNE CONTRACTUELLE POUR run_all.sh <<<
+        print(f"H_STAR = {hstar}")
+
+        print(
+            f"[CAL] H_STAR sur {event}: "
+            f"peak_meas={meas:.3e} -> target={hpeak_target:.3e} => H_STAR={hstar:.6g}"
+        )
+
+        # IMPORTANT : on s'arrête ici si on est en mode calibration pure
+        return {
+            "event": event,
+            "H_STAR": hstar,
+        }
+
+    # applique H_STAR (gain) avant tout
+    hH = hH_raw * hstar
+    hL = hL_raw * hstar
+
+    # ---- 5) bande energie (flow,fhigh) ----
+    hH_f = safe_bandpass(hH, fs, flow, fhigh)
+    hL_f = safe_bandpass(hL, fs, flow, fhigh)
+
+    peak_ref = max(robust_peak(hH_f, peak_quantile), robust_peak(hL_f, peak_quantile))
+
+    # normalisation par pic OPTIONNELLE (sinon conserve amplitude physique)
+    if peak_norm and peak_ref > 0:
+        hH_f = hH_f / peak_ref
+        hL_f = hL_f / peak_ref
+
+    # ---- 6) FFT courte ----
+    N = min(hH_f.size, hL_f.size)
+    if N < 16:
+        raise RuntimeError(f"Segment signal trop court (N={N})")
+
+    win = tukey(N, 0.2)
+    H1 = np.fft.rfft(hH_f[:N] * win).astype(np.complex128)
+    H2 = np.fft.rfft(hL_f[:N] * win).astype(np.complex128)
+    f = np.fft.rfftfreq(N, d=1.0 / fs).astype(np.float64)
+
+    mask = (f >= flow) & (f <= min(fhigh, 0.95 * (0.5 * fs)))
     f_use = f[mask]
-    dEdf_use = dEdf[mask]
+    H1 = H1[mask]
+    H2 = H2[mask]
 
-    # -------------------------------------------------------
-    # 6) Intégrales (E, m_sun, ν_eff)
-    # -------------------------------------------------------
+    S1i = np.interp(f_use, f_psd, S1).astype(np.float64)
+    S2i = np.interp(f_use, f_psd, S2).astype(np.float64)
 
-    den = trapezoid(dEdf_use, f_use)
-    nu_eff = float(trapezoid(f_use * dEdf_use, f_use) / den) if den > 0 else 0.0
-    E = float(trapezoid(dEdf_use, f_use)) * SCALE_EJ
-    m_sun = E / (M_sun * c**2)
-    # -------------------------------------------------------
-    os.makedirs("results", exist_ok=True)
+    phi = (2.0 * np.pi * f_use * tau_hl).astype(np.float64)
+    r = float(distance_mpc) * Mpc
 
+    dEdf = coherent_energy_numba(H1, H2, S1i, S2i, phi, f_use, r)
+    dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
 
-    out_json = {
-        "event": event_name,
+    E_internal = float(trapezoid(dEdf, f_use))
+
+    # ---- 7) calibration SCALE_EJ event B ----
+    # ---- 7) calibration SCALE_EJ event B ----
+    scale_ej = float(scale_ej_in)
+
+    if calibrate_scale_event and msun_target is not None and event == calibrate_scale_event:
+
+        # énergie cible physique
+        E_target = float(msun_target) * (M_sun * c * c)
+
+        if E_internal > 0.0 and np.isfinite(E_internal):
+            scale_ej = E_target / E_internal
+        else:
+            raise RuntimeError(
+                f"[FATAL] SCALE_EJ: E_internal invalide ({E_internal}) pour {event}"
+            )
+
+        # >>> LIGNE CONTRACTUELLE POUR run_all.sh <<<
+        print(f"SCALE_EJ = {scale_ej}")
+
+        print(
+            f"[CAL] SCALE_EJ sur {event}: "
+            f"E_internal={E_internal:.3e} -> "
+            f"target={E_target:.3e} => "
+            f"SCALE_EJ={scale_ej:.6g}"
+        )
+
+        # IMPORTANT : arrêt ici en mode calibration
+        return {
+            "event": event,
+            "SCALE_EJ": float(scale_ej),
+        }
+
+    E_total = float(E_internal * scale_ej)
+    m_sun_val = float(E_total / (M_sun * c * c))
+
+    # ---- 8) nu_eff sur nu-band ----
+    nb0, nb1 = bands.nu_band
+    mask_nu = (f_use >= nb0) & (f_use <= nb1)
+    nu_eff = nu_eff_energy(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else 0.0
+    nu_eff_raw = nu_eff_energy(f_use, dEdf)
+
+    out = {
+        "event": event,
+        "gps": float(gps),
         "distance_mpc": float(distance_mpc),
-        "freq_Hz": f_use.tolist(),
-        "dEdf_J_Hz": dEdf_use.tolist(),
-        "E_total_J": float(E),
-        "m_sun": float(m_sun),
-        "nu_eff_Hz": float(nu_eff),
-        "tau_s": float(tau),
+        "used": used,
         "flow_Hz": float(flow),
-        "fhigh_Hz": float(fhigh)
+        "fhigh_Hz": float(fhigh),
+        "tau_band_Hz": [float(tb0), float(tb1)],
+        "nu_band_Hz": [float(nb0), float(nb1)],
+        "tau_hl_s": float(tau_hl),
+        "peak_quantile": float(peak_quantile),
+        "peak_norm": bool(peak_norm),
+        "peak_ref": float(peak_ref),
+        "H_STAR": float(hstar),
+        "SCALE_EJ": float(scale_ej),
+        "E_internal": float(E_internal),
+        "E_total_J": float(E_total),
+        "m_sun": float(m_sun_val),
+        "nu_eff": {
+            "nu_eff_energy": float(nu_eff),
+            "nu_eff_energy_raw": float(nu_eff_raw),
+        },
+        "freq_Hz": f_use.tolist(),
+        "dEdf_internal": dEdf.tolist(),
     }
-    with open(f"results/{event_name}.json", "w") as fj:
-        json.dump(out_json, fj, indent=2)
-    print(f"\n=== ANALYSE SPECTRALE {event_name} ===")
+
+    os.makedirs("results", exist_ok=True)
+    with open(os.path.join("results", f"{event}.json"), "w") as f:
+        json.dump(out, f, indent=2)
+
+    print(f"=== ANALYSE SPECTRALE {event} ===")
+    print(f"GPS: {gps}")
     print(f"Distance: {distance_mpc} Mpc")
-    print(f"Énergie intrinsèque: {E:.3e} J ({m_sun:.3f} M☉)")
-    print(f"Fréquence effective: {nu_eff:.1f} Hz")
-    print(f"Référence d'amplitude: h★={H_STAR:.2e}")
-
+    print(f"Tau (H1-L1): {tau_hl:.6e} s")
+    print(f"Energie intrins. (J): {E_total:.3e}  ({m_sun_val:.6f} M_sun)")
+    print(f"nu_eff (energy): {nu_eff:.2f} Hz (raw: {nu_eff_raw:.2f} Hz)")
+    print(f"[DEBUG] flow={flow} fhigh={fhigh}")
     if plot:
-        plt.figure(figsize=(10, 6))
-        plt.loglog(f_use, dEdf_use, lw=1.5, 
-                  label=f"{event_name} (E={E:.2e} J, ν_eff={nu_eff:.1f} Hz, d={distance_mpc} Mpc)")
-
-        f_log = np.geomspace(f_use[0], f_use[-1], 500)
-        dEdf_log = np.interp(f_log, f_use, dEdf_use)
-        log_smooth = gaussian_filter1d(np.log10(np.maximum(dEdf_log, 1e-50)), sigma=2)
-
-        plt.loglog(f_log, 10**log_smooth, '--', lw=1, color='orange', alpha=0.7, label=f"{event_name} (lissé)")
-        plt.xlabel("Fréquence (Hz)", fontsize=12)
-        plt.ylabel("dE/df (J/Hz)", fontsize=12)
-        plt.title(f"Spectre d'énergie gravitationnelle intrinsèque\n{event_name} — h★={H_STAR:.2e}, d={distance_mpc} Mpc", fontsize=14)
-        plt.grid(True, which="both", alpha=0.3, linestyle='--')
-        plt.legend(fontsize=10)
-        plt.xlim(f_use[0], f_use[-1])
-        plt.ylim(auto=True)
-
-        plt.axvline(x=nu_eff, color='red', linestyle=':', linewidth=1, label=f"ν_eff = {nu_eff:.1f} Hz")
-
+        import matplotlib.pyplot as plt
         os.makedirs("plots", exist_ok=True)
-        plt.savefig(f"plots/{event_name}_spectre.png", dpi=200, bbox_inches='tight')
-        plt.show()
+        plt.figure(figsize=(10, 6))
+        plt.loglog(f_use, np.maximum(dEdf, 1e-80), lw=1.4, label=f"{event}")
 
-    return {"E_total": E, "m_sun": m_sun, "nu_eff": nu_eff, "distance_mpc": distance_mpc}
+        # lissage log-log pour visuel
+        f_log = np.geomspace(max(f_use[0], 1e-6), f_use[-1], 500)
+        d_log = np.interp(f_log, f_use, np.maximum(dEdf, 1e-80))
+        log_smooth = gaussian_filter1d(np.log10(d_log), sigma=2)
+        plt.loglog(f_log, 10 ** log_smooth, "--", lw=1.2, alpha=0.8, label="smoothed")
 
-# ==========================
-# CLI
-# ==========================
-def main():
+        if nu_eff > 0:
+            plt.axvline(x=nu_eff, linestyle=":", lw=1.0, label=f"nu_eff={nu_eff:.1f} Hz")
 
-    # ----------------------------
-    # Arguments CLI
-    # ----------------------------
-    ap = argparse.ArgumentParser(description="Analyse spectrale cohérente LIGO/Virgo (h★ → énergie intrinsèque)")
+        plt.xlabel("Frequence (Hz)")
+        plt.ylabel("dE/df (interne)")
+        plt.title(f"Spectre coherent H1-L1 - {event}")
+        plt.grid(True, which="both", alpha=0.25, linestyle="--")
+        plt.legend()
+        out_plot = os.path.join("plots", f"{event}_spectre.png")
+        plt.savefig(out_plot, dpi=200, bbox_inches="tight")
+        plt.close()
+        print("[plot]", out_plot)
 
-    ap.add_argument("--event", type=str, help="Nom d'événement")
-    ap.add_argument("--list-events", action="store_true")
+    return out
 
-    ap.add_argument("--flow", type=float)
-    ap.add_argument("--fhigh", type=float)
-    ap.add_argument("--signal-win", type=float)
-    ap.add_argument("--noise-pad", type=float)
-    ap.add_argument("--distance-mpc", type=float)
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Analyse spectrale coherente GWOSC (H1-L1, V1 optionnel)")
+
+    ap.add_argument("--event", required=False, help="Nom d'evenement (ex: GW150914)")
+    ap.add_argument("--event-params", default="event_params.json", help="JSON params events")
+    ap.add_argument("--list-events", action="store_true", help="Liste les events du JSON")
+
+    ap.add_argument("--no-virgo", action="store_true", help="N'essaie pas V1")
+
+    ap.add_argument("--flow", type=float, default=None)
+    ap.add_argument("--fhigh", type=float, default=None)
+    ap.add_argument("--signal-win", type=float, default=None)
+    ap.add_argument("--noise-pad", type=float, default=None)
+    ap.add_argument("--distance-mpc", type=float, default=None)
+
+    ap.add_argument("--tau-band", type=float, nargs=2, default=[35.0, 250.0], metavar=("F1", "F2"))
+    ap.add_argument("--nu-band", type=float, nargs=2, default=[30.0, 350.0], metavar=("F1", "F2"))
+
+    ap.add_argument("--hstar", type=float, default=DEFAULT_HSTAR)
+    ap.add_argument("--scale-ej", type=float, default=DEFAULT_SCALE_EJ)
+
+    ap.add_argument("--peak-norm", action="store_true", help="Normalise par peak_ref (debug)")
+    ap.add_argument("--peak-quantile", type=float, default=99.5)
+
+    ap.add_argument("--calibrate-hstar", type=str, default=None, help="Event de calibration H_STAR")
+    ap.add_argument("--hpeak-target", type=float, default=None, help="Cible peak_ref (strain) pour H_STAR")
+
+    ap.add_argument("--calibrate-scale", type=str, default=None, help="Event de calibration SCALE_EJ")
+    ap.add_argument("--msun-target", type=float, default=None, help="Cible energie en M_sun c^2")
+
     ap.add_argument("--plot", action="store_true")
 
     args = ap.parse_args()
 
-    # ----------------------------
-    # Liste des événements
-    # ----------------------------
+    params = load_event_params(args.event_params)
+
     if args.list_events:
-        print("=== Événements disponibles (JSON) ===")
-        for k in sorted(EVENT_PARAMS.keys()):
-            print(" -", k)
+        for k in sorted(params.keys()):
+            print(k)
         return
 
     if not args.event:
-        raise ValueError("Veuillez fournir --event <GWxxxxxx>")
+        raise SystemExit("Erreur: fournir --event ou --list-events")
 
     ev = args.event
+    if ev not in params:
+        raise SystemExit(f"Erreur: event '{ev}' absent dans {args.event_params}")
 
-    # ----------------------------
-    # Paramètres événement
-    # ----------------------------
-    if ev not in EVENT_PARAMS:
-        raise ValueError(f"Événement '{ev}' absent dans event_params.json")
+    # securite degenerate
+    if args.calibrate_hstar and args.calibrate_scale and args.calibrate_hstar == args.calibrate_scale:
+        raise SystemExit("[FATAL] H_STAR et SCALE_EJ ne peuvent pas etre calibres sur le meme event")
 
-    evp = EVENT_PARAMS[ev]
+    evp = params.get(ev, {}) if isinstance(params.get(ev), dict) else {}
 
-    flow        = args.flow        if args.flow        is not None else evp["flow"]
-    fhigh       = args.fhigh       if args.fhigh       is not None else evp["fhigh"]
-    signal_win  = args.signal_win  if args.signal_win  is not None else evp["signal_win"]
-    noise_pad   = args.noise_pad   if args.noise_pad   is not None else evp["noise_pad"]
+    flow = float(args.flow) if args.flow is not None else float(evp.get("flow", 20.0))
+    fhigh = float(args.fhigh) if args.fhigh is not None else float(evp.get("fhigh", 512.0))
+    signal_win = float(args.signal_win) if args.signal_win is not None else float(evp.get("signal_win", 0.2))
+    noise_pad = float(args.noise_pad) if args.noise_pad is not None else float(evp.get("noise_pad", 50.0))
 
-    # Distance JSON + override CLI
-    distance_mpc = args.distance_mpc if args.distance_mpc is not None else evp["distance_mpc"]
+    distance_mpc = float(args.distance_mpc) if args.distance_mpc is not None else float(evp.get("distance_mpc", 0.0))
+    if distance_mpc <= 0:
+        raise SystemExit("Erreur: distance_mpc doit etre >0 (JSON ou --distance-mpc)")
 
-    gps = datasets.event_gps(ev)
+    bands = Bands(tau_band=(float(args.tau_band[0]), float(args.tau_band[1])),
+                  nu_band=(float(args.nu_band[0]), float(args.nu_band[1])))
 
-    t0_noise = gps - noise_pad
-    t1_noise = gps + noise_pad
-    # Fenêtres absolues
-    # bruits avant/après = noise_pad
-    # signal = signal_win
-    H1, L1 = fetch("H1", t0_noise, t1_noise), fetch("L1", t0_noise, t1_noise)
+    analyze_event(
+        event=ev,
+        params=params,
+        flow=flow,
+        fhigh=fhigh,
+        signal_win=signal_win,
+        noise_pad=noise_pad,
+        distance_mpc=distance_mpc,
+        bands=bands,
+        use_virgo=not args.no_virgo,
+        peak_norm=bool(args.peak_norm),
+        peak_quantile=float(args.peak_quantile),
+        hstar_in=float(args.hstar),
+        scale_ej_in=float(args.scale_ej),
+        calibrate_hstar_event=args.calibrate_hstar,
+        hpeak_target=args.hpeak_target,
+        calibrate_scale_event=args.calibrate_scale,
+        msun_target=args.msun_target,
+        plot=bool(args.plot),
+    )
 
-    # Tentative Virgo
-    try:
-        V1 = fetch("V1", t0_noise, t1_noise)
-        print(" → Virgo OK")
-    except Exception:
-        V1 = None
-        print(" → Virgo non disponible")
-    print(f"📡 Téléchargement des données pour {args.event}...")
-
-    res = analyze_coherent_spectral(H1, L1, gps, distance_mpc, V1,
-                                    event_name=args.event,
-                                    flow=flow, fhigh=fhigh,
-                                    noise_pad=noise_pad,
-                                    signal_win=signal_win, plot=args.plot)
-
-    print(f"\n🎯 SYNTHÈSE FINALE: {args.event}")
-    print(f"Distance: {args.distance_mpc} Mpc")
-    print(f"Énergie intrinsèque: {res['E_total']:.3e} J ({res['m_sun']:.3f} M☉)")
-    print(f"Fréquence effective: {res['nu_eff']:.1f} Hz")
-    print(f"NOTE: Énergie intrinsèque calculée avec correction de distance (×d²)")
-    print(f"      Référence d'amplitude: h★={H_STAR:.2e}\n{'='*60}")
 
 if __name__ == "__main__":
     main()
-
