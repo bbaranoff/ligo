@@ -1,6 +1,12 @@
 # ligo  
 Testing LIGO research in Python  
 
+run
+
+```
+CAL_HSTAR_EVENT=GW151226 HPEAK_TARGET=1e-26 CAL_EVENT=GW150914 MSUN_TARGET=3.0 bash run_all.sh
+```
+
 ```
 git clone https://github.com/bbaranoff/ligo
 cd ligo
