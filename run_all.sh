@@ -29,13 +29,13 @@ PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
 
 # --- Calibration LSQ (une seule fois) ---
-#python3 "$SCRIPT" \
-#  --calibrate-lsq \
-#  --event-params "$PARAMS" \
-#  --refs "$REFS" \
-#  --ref-key energy_J \
-#  --exclude-cls BNS \
-#  --cal-out calibrated.json
+python3 "$SCRIPT" \
+  --calibrate-lsq \
+  --event-params "$PARAMS" \
+  --refs "$REFS" \
+  --ref-key energy_J \
+  --exclude-cls BNS \
+  --cal-out calibrated.json
 
 
 # ------------------------------- utils ---------------------------------------
@@ -185,8 +185,8 @@ for ev in "${EVENTS[@]}"; do
     --event-params "$PARAMS"
     "${EV_OPTS[@]}"
     ${NO_VIRGO:+--no-virgo}
-    --hstar 1
-    --scale 4.177444e+37
+    --hstar "$H_STAR"
+    --scale "$EJ_SCALE"
   )
 
   [[ -n "${DEBUG:-}" ]] && echo "[CMD] ${CMD[*]}" >&2

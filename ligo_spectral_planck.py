@@ -462,7 +462,7 @@ def analyze_event(
 
     x_tau = safe_bandpass(seg_tau_H, fs, tb0, tb1)
     y_tau = safe_bandpass(seg_tau_L, fs, tb0, tb1)
-    tau_hl = estimate_delay_time(x_tau, y_tau, fs, hstar_in)
+    tau_hl = estimate_delay_time(x_tau, y_tau, fs, max_delay_ms=15.0)
     tau_hl = -abs(float(tau_hl))
 
     # -----------------------------
