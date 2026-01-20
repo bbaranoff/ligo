@@ -27,6 +27,14 @@ PY="${PY:-python3}"
 SCRIPT="${SCRIPT:-ligo_spectral_planck.py}"
 PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
+# --- Calibration LSQ (une seule fois) ---
+python3 "$SCRIPT" \
+  --calibrate-lsq \
+  --event-params "$PARAMS" \
+  --refs "$REFS" \
+  --ref-key energy_J \
+  --exclude-cls BNS \
+  --cal-out calibrated.json
 # --- Load calibration constants ---
 [[ -f calibrated.json ]] || die "calibrated.json manquant (la calibration LSQ a échoué ?)"
 
@@ -36,14 +44,6 @@ SCALE_EJ="$(jq -r '.SCALE_EJ' calibrated.json)"
 # mini-sanity
 [[ "$HSTAR" != "null" && "$SCALE_EJ" != "null" ]] || die "calibrated.json invalide (H_STAR/SCALE_EJ null)"
 
-# --- Calibration LSQ (une seule fois) ---
-python3 "$SCRIPT" \
-  --calibrate-lsq \
-  --event-params "$PARAMS" \
-  --refs "$REFS" \
-  --ref-key energy_J \
-  --exclude-cls BNS \
-  --cal-out calibrated.json
 
 
 # ------------------------------- utils ---------------------------------------
