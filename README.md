@@ -4,7 +4,9 @@ Testing LIGO research in Python
 run
 
 ```
-CAL_HSTAR_EVENT=GW151226 HPEAK_TARGET=1e-26 CAL_EVENT=GW150914 MSUN_TARGET=3.0 bash run_all.sh
+python3 ligo_spectral_planck.py   --calibrate-lsq   --event-params event_params.json   --refs ligo_refs.json   --ref-key energy_J   --exclude-cls BNS   --cal-out calibrated.json
+bash run_all.sh
+python test421_better.py results/ --glob GW*
 ```
 
 ```
