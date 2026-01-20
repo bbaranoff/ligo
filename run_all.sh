@@ -28,6 +28,16 @@ SCRIPT="${SCRIPT:-ligo_spectral_planck.py}"
 PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
 
+# --- Calibration LSQ (une seule fois) ---
+#python3 "$SCRIPT" \
+#  --calibrate-lsq \
+#  --event-params "$PARAMS" \
+#  --refs "$REFS" \
+#  --ref-key energy_J \
+#  --exclude-cls BNS \
+#  --cal-out calibrated.json
+
+
 # ------------------------------- utils ---------------------------------------
 abspath() {
   "$PY" - <<'PY' "$1"
@@ -133,10 +143,6 @@ need_cmd "$PY"
 [[ -f "$PARAMS" ]] || die "introuvable: $PARAMS"
 [[ -f "$SCRIPT" ]] || die "introuvable: $SCRIPT"
 
-# Calibration guard
-if [[ -n "${CAL_EVENT:-}" && -n "${CAL_HSTAR_EVENT:-}" && "${CAL_EVENT:-}" == "${CAL_HSTAR_EVENT:-}" ]]; then
-  die "H_STAR et SCALE_EJ ne peuvent pas etre calibres sur le meme event"
-fi
 
 # ------------------------------- banner --------------------------------------
 echo "============================================================="
@@ -167,58 +173,6 @@ mkdir -p results
 LOG="results/events.log"
 : > "$LOG"
 
-# ------------------------------ calibrations ---------------------------------
-HSTAR_OPT=()
-SCALE_OPT=()
-
-if [[ -n "${CAL_HSTAR_EVENT:-}" && -n "${HPEAK_TARGET:-}" ]]; then
-  mapfile -d '' -t CAL_OPTS_H < <(build_opts "$CAL_HSTAR_EVENT")
-
-  echo "[CAL] Calibration H_STAR sur ${CAL_HSTAR_EVENT} (peak=${HPEAK_TARGET})" >&2
-  OUT_CAL_HSTAR="$(
-    "$PY" "$SCRIPT" \
-      --event "$CAL_HSTAR_EVENT" \
-      --event-params "$PARAMS" \
-      "${CAL_OPTS_H[@]}" \
-      ${NO_VIRGO:+--no-virgo} \
-      --calibrate-hstar "$CAL_HSTAR_EVENT" \
-      --hpeak-target "$HPEAK_TARGET" \
-      2>&1
-  )"
-
-  H_STAR="$(printf '%s\n' "$OUT_CAL_HSTAR" | parse_keyline "H_STAR" | tail -n 1)"
-  [[ -n "${H_STAR:-}" ]] || {
-    echo "$OUT_CAL_HSTAR" >&2
-    die "Calibration H_STAR echouee (pas de ligne 'H_STAR = ...')"
-  }
-  echo "[CAL] H_STAR = $H_STAR" >&2
-  HSTAR_OPT=(--hstar "$H_STAR")
-fi
-
-if [[ -n "${CAL_EVENT:-}" && -n "${MSUN_TARGET:-}" ]]; then
-  mapfile -d '' -t CAL_OPTS_E < <(build_opts "$CAL_EVENT")
-
-  echo "[CAL] Calibration SCALE_EJ sur ${CAL_EVENT} (${MSUN_TARGET} M⊙c²)" >&2
-  OUT_CAL_SCALE="$(
-    "$PY" "$SCRIPT" \
-      --event "$CAL_EVENT" \
-      --event-params "$PARAMS" \
-      "${CAL_OPTS_E[@]}" \
-      ${NO_VIRGO:+--no-virgo} \
-      "${HSTAR_OPT[@]}" \
-      --calibrate-scale "$CAL_EVENT" \
-      --msun-target "$MSUN_TARGET" \
-      2>&1
-  )"
-
-  SCALE_EJ="$(printf '%s\n' "$OUT_CAL_SCALE" | parse_keyline "SCALE_EJ" | tail -n 1)"
-  [[ -n "${SCALE_EJ:-}" ]] || {
-    echo "$OUT_CAL_SCALE" >&2
-    die "Calibration SCALE_EJ echouee (pas de ligne 'SCALE_EJ = ...')"
-  }
-  echo "[CAL] SCALE_EJ = $SCALE_EJ" >&2
-  SCALE_OPT=(--scale-ej "$SCALE_EJ")
-fi
 
 # ------------------------------- main loop -----------------------------------
 count=0
@@ -231,8 +185,8 @@ for ev in "${EVENTS[@]}"; do
     --event-params "$PARAMS"
     "${EV_OPTS[@]}"
     ${NO_VIRGO:+--no-virgo}
-    "${HSTAR_OPT[@]}"
-    "${SCALE_OPT[@]}"
+    --hstar 1
+    --scale 4.177444e+37
   )
 
   [[ -n "${DEBUG:-}" ]] && echo "[CMD] ${CMD[*]}" >&2
