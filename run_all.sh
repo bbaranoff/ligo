@@ -27,10 +27,14 @@ PY="${PY:-python3}"
 SCRIPT="${SCRIPT:-ligo_spectral_planck.py}"
 PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
-# Valeurs par défaut (évite set -u qui explose)
-H_STAR="${H_STAR:-1.0}"
-EJ_SCALE="${EJ_SCALE:-1.0}"
-CAL_FILE="${CAL_FILE:-calibrated.json}"
+# --- Load calibration constants ---
+[[ -f calibrated.json ]] || die "calibrated.json manquant (la calibration LSQ a échoué ?)"
+
+HSTAR="$(jq -r '.H_STAR' calibrated.json)"
+SCALE_EJ="$(jq -r '.SCALE_EJ' calibrated.json)"
+
+# mini-sanity
+[[ "$HSTAR" != "null" && "$SCALE_EJ" != "null" ]] || die "calibrated.json invalide (H_STAR/SCALE_EJ null)"
 
 # --- Calibration LSQ (une seule fois) ---
 python3 "$SCRIPT" \
@@ -189,8 +193,8 @@ for ev in "${EVENTS[@]}"; do
     --event-params "$PARAMS"
     "${EV_OPTS[@]}"
     ${NO_VIRGO:+--no-virgo}
-    --hstar "$H_STAR"
-    --scale "$EJ_SCALE"
+    --hstar "$HSTAR"
+    --scale-ej "$SCALE_EJ"
   )
 
   [[ -n "${DEBUG:-}" ]] && echo "[CMD] ${CMD[*]}" >&2

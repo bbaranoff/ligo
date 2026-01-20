@@ -474,8 +474,8 @@ def analyze_event(
     hL_raw = np.asarray(tsL.crop(s0, s1).value, float)
 
     # Apply H_STAR
-    hH = hH_raw
-    hL = hL_raw
+    hH = hH_raw * float(hstar_in)
+    hL = hL_raw * float(hstar_in)
 
     # Bandpass for analysis band
     hH_f = safe_bandpass(hH, fs, flow, fhigh)
@@ -566,10 +566,15 @@ def analyze_event(
     if return_internals:
         hL_cal = safe_bandpass(hL_raw, fs, tb0, tb1)
         peak_raw = robust_peak(hL_cal, peak_quantile)
+
+        # "power-like" observable (quadratic, stable): mean square in tau band
+        pwr_raw = float(np.mean(hL_cal * hL_cal))
+
         return {
             "event": event,
             "E_internal": float(E_internal),
             "peak_raw": float(peak_raw),
+            "pwr_raw": float(pwr_raw),
             "m_sun_obs": float(m_sun_val),
         }
 
