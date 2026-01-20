@@ -19,7 +19,7 @@ set -euo pipefail
 #   DEBUG=1
 #
 # Optional calibrations:
-#   CAL_HSTAR_EVENT=GW170817  HPEAK_TARGET=3e-22
+#   CAL_H_STAR_EVENT=GW170817  HPEAK_TARGET=3e-22
 #   CAL_EVENT=GW150914        MSUN_TARGET=3.0
 # -----------------------------------------------------------------------------
 
@@ -28,7 +28,7 @@ SCRIPT="${SCRIPT:-ligo_spectral_planck.py}"
 PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
 # Valeurs par défaut (évite set -u qui explose)
-HSTAR="${HSTAR:-1.0}"
+H_STAR="${H_STAR:-1.0}"
 SCALE="${SCALE:-1.0}"
 CAL_FILE="${CAL_FILE:-calibrated.json}"
 
