@@ -29,7 +29,7 @@ PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
 # Valeurs par défaut (évite set -u qui explose)
 H_STAR="${H_STAR:-1.0}"
-SCALE="${SCALE:-1.0}"
+EJ_SCALE="${EJ_SCALE:-1.0}"
 CAL_FILE="${CAL_FILE:-calibrated.json}"
 
 # --- Calibration LSQ (une seule fois) ---
