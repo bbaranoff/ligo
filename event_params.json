@@ -1,0 +1,465 @@
+{
+  "_meta": {
+    "description": "GWOSC event parameters for the spectral-tau pipeline (GPS, distance, and per-event analysis knobs). Distances are point estimates from GWOSC tables; use PE posteriors for rigorous uncertainty.",
+    "sources": {
+      "gwtc21_table": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "query_lastver_page5": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0",
+      "gwtc1_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040",
+      "gwtc2_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "default": {
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0
+  },
+  "GW150914": {
+    "gps": 1126259462.4,
+    "distance_mpc": 470,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW150914/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW150914/v4/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW151226": {
+    "gps": 1135136350.6,
+    "distance_mpc": 460,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW151226/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW151226/v3/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170104": {
+    "gps": 1167559936.6,
+    "distance_mpc": 1110,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170104/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170104/v3/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170608": {
+    "gps": 1180922494.5,
+    "distance_mpc": 340,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170608/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170608/v4/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170729": {
+    "gps": 1185389807.3,
+    "distance_mpc": 2490,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170729/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170729/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170809": {
+    "gps": 1186302519.8,
+    "distance_mpc": 1070,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170809/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170809/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170814": {
+    "gps": 1186741861.5,
+    "distance_mpc": 610,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW170814/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW170814/v4/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW170817": {
+    "gps": 1187008882.4,
+    "distance_mpc": 40,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-1-confident/GW170817/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-1-confident/GW170817/v3/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040"
+    }
+  },
+  "GW190403_051519": {
+    "gps": 1238303737.2,
+    "distance_mpc": 8280,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190403_051519/v1/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190403_051519/v1/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190412": {
+    "gps": 1239082262.1,
+    "distance_mpc": 720,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190412/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190412/v4/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190413_052954": {
+    "gps": 1239168612.5,
+    "distance_mpc": 3320,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190413_052954/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190413_052954/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190413_134308": {
+    "gps": 1239198206.7,
+    "distance_mpc": 3800,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190413_134308/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190413_134308/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190421_213856": {
+    "gps": 1239917954.2,
+    "distance_mpc": 2590,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190421_213856/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190421_213856/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190503_185404": {
+    "gps": 1240944862.2,
+    "distance_mpc": 1520,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190503_185404/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190503_185404/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190514_065416": {
+    "gps": 1241852074.8,
+    "distance_mpc": 3890,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190514_065416/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190514_065416/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190517_055101": {
+    "gps": 1242107479.8,
+    "distance_mpc": 1790,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190517_055101/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190517_055101/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190519_153544": {
+    "gps": 1242315362.3,
+    "distance_mpc": 2600,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190519_153544/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190519_153544/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190521": {
+    "gps": 1242442967.4,
+    "distance_mpc": 3310,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190521/v4/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/GWTC-2.1-confident/GW190521/v4/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190828_063405": {
+    "gps": 1251010463.4,
+    "distance_mpc": 2070,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/IAS-O3a/GW190828_063405/v2/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/IAS-O3a/GW190828_063405/v2/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  },
+  "GW190828_065509": {
+    "gps": 1251010527.8,
+    "distance_mpc": 1540,
+    "flow": 20.0,
+    "fhigh": 350.0,
+    "tau_band": [
+      30.0,
+      350.0
+    ],
+    "nu_band": [
+      20.0,
+      500.0
+    ],
+    "signal_win": 1.2,
+    "noise_pad": 1200.0,
+    "sources": {
+      "gwosc_event_html": "https://gwosc.org/eventapi/html/IAS-O3a/GW190828_065509/v3/",
+      "gwosc_event_json": "https://gwosc.org/eventapi/json/IAS-O3a/GW190828_065509/v3/",
+      "gwosc_table_or_query": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0",
+      "catalog_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
+    }
+  }
+}
