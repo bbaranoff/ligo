@@ -28,7 +28,7 @@ SCRIPT="${SCRIPT:-ligo_spectral_planck.py}"
 PARAMS="${PARAMS:-event_params.json}"
 REFS="${REFS:-ligo_refs.json}"
 # --- Calibration LSQ (une seule fois) ---
-python3 "$SCRIPT" \
+[[ -f calibrated.json ]] || python3 "$SCRIPT" \
   --calibrate-lsq \
   --event-params "$PARAMS" \
   --refs "$REFS" \
