@@ -16,4 +16,6 @@ pip3 install scipy gwosc numpy matplotlib gwpy numba
 # 4. lancer pipeline
 bash run_all.sh
 python3 plot_all_spectra.py
-xdg-open plots/all_spectra_simple.png
+python3 cluster_kmeans_pca.py
+cat clusters_kmeans.txt
+xdg-open plots/spectres_normalises.png
