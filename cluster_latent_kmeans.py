@@ -2,12 +2,23 @@
 # -*- coding: utf-8 -*-
 
 """
-Clustering "from raw LIGO results json" (results/GW*.json)
-- No LIGO refs
-- No masses
-- Uses only freq_Hz + dEdf_internal (and optionally E_total_J if present)
+Pipeline clustering "from raw LIGO results json" (results/GW*.json)
+
+But:
+  1) Écrémer les outliers en amont avec DBSCAN (label = -1)
+  2) Clustering fin du noyau restant avec KMeans (labels 0..k-1)
+
+Inputs:
+  - freq_Hz
+  - dEdf_internal
+  - (optionnel) E_total_J si présent (pas utilisé ici)
+
 Features:
   logE, nu_mean, nu_peak, nu_invf, frac_bw, Q_eff, peak_rel, R_LH
+
+Sortie:
+  - clusters report (inclut CLUSTER -1 = outliers DBSCAN)
+  - optionnel: CSV features+label
 """
 
 from __future__ import annotations
@@ -15,15 +26,14 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import math
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.decomposition import PCA
 
 
@@ -34,13 +44,20 @@ from sklearn.decomposition import PCA
 def trapz(y: np.ndarray, x: np.ndarray) -> float:
     return float(np.trapz(y, x))
 
+
 def safe_log10(x: float, eps: float = 1e-300) -> float:
     return float(np.log10(max(float(x), eps)))
+
 
 def as_float_array(a) -> np.ndarray:
     return np.asarray(a, dtype=float)
 
-def spectral_cdf_quantiles(f: np.ndarray, w: np.ndarray, qs=(0.10, 0.50, 0.90)) -> List[float]:
+
+def spectral_cdf_quantiles(
+    f: np.ndarray,
+    w: np.ndarray,
+    qs=(0.10, 0.50, 0.90),
+) -> List[float]:
     """
     Quantiles de la distribution définie par w(f) >= 0 (normalisée via intégrale).
     Retourne f(q) pour q in qs.
@@ -63,6 +80,10 @@ def spectral_cdf_quantiles(f: np.ndarray, w: np.ndarray, qs=(0.10, 0.50, 0.90)) 
         out.append(float(np.interp(float(q), cdf, f)))
     return out
 
+
+# -----------------------
+# Features
+# -----------------------
 
 @dataclass
 class Features:
@@ -98,36 +119,34 @@ def compute_features_from_json(path: str, f_split: float) -> Optional[Features]:
     if f_hz.size < 8 or dedf.size != f_hz.size:
         return None
 
-    # Energie interne (dans tes unités internes)
+    # Energie interne (unités internes)
     E_int = trapz(dedf, f_hz)
     logE = safe_log10(E_int)
 
     # nu_mean (barycentre énergétique)
-    den = E_int
     nu_mean = 0.0
-    if np.isfinite(den) and den > 0:
-        nu_mean = float(trapz(f_hz * dedf, f_hz) / den)
+    if np.isfinite(E_int) and E_int > 0:
+        nu_mean = float(trapz(f_hz * dedf, f_hz) / E_int)
 
     # nu_peak (fréquence au max)
     idx = int(np.argmax(dedf)) if dedf.size else 0
     nu_peak = float(f_hz[idx]) if f_hz.size else 0.0
 
     # nu_invf = (∫dEdf) / (∫dEdf/f)
-    # => correspond au "barycentre 1/f" (harmonique-ish), utile pour chirp/low freq
     denom_invf = trapz(dedf / np.maximum(f_hz, 1e-12), f_hz)
     nu_invf = float(E_int / denom_invf) if np.isfinite(denom_invf) and denom_invf > 0 else 0.0
 
     # Bande passante: f10, f90 via CDF(dEdf)
-    f10, f50, f90 = spectral_cdf_quantiles(f_hz, dedf, qs=(0.10, 0.50, 0.90))
+    f10, _f50, f90 = spectral_cdf_quantiles(f_hz, dedf, qs=(0.10, 0.50, 0.90))
     dnu_80 = float(f90 - f10) if np.isfinite(f90) and np.isfinite(f10) else float("nan")
 
-    # frac_bw = dnu_80 / nu_mean (dimensionless)
+    # frac_bw = dnu_80 / nu_mean
     frac_bw = float(dnu_80 / max(nu_mean, 1e-12)) if np.isfinite(dnu_80) else float("nan")
 
-    # Q_eff ~ nu_mean / dnu_80 (l’inverse de frac_bw)
+    # Q_eff ~ nu_mean / dnu_80
     Q_eff = float(max(nu_mean, 1e-12) / max(dnu_80, 1e-12)) if np.isfinite(dnu_80) else float("nan")
 
-    # peak_rel = peak / mean(dEdf) sur la bande (évite l’échelle brute)
+    # peak_rel = peak / mean(dEdf)
     mean_spec = float(np.mean(dedf)) if dedf.size else 0.0
     peak_rel = float(np.max(dedf) / max(mean_spec, 1e-30)) if mean_spec > 0 else 0.0
 
@@ -151,6 +170,10 @@ def compute_features_from_json(path: str, f_split: float) -> Optional[Features]:
     )
 
 
+# -----------------------
+# Report
+# -----------------------
+
 def fmt(x: float, spec: str) -> str:
     if x is None or not np.isfinite(x):
         return "NA"
@@ -163,35 +186,32 @@ def write_clusters_report(
     labels: np.ndarray,
     order: List[str],
     f_split: float,
+    header_extra: str = "",
 ) -> None:
-    # regroupe par cluster
     clusters: Dict[int, List[Features]] = {}
     for ft, lab in zip(feats, labels):
         clusters.setdefault(int(lab), []).append(ft)
 
     lines = []
-    lines.append(f"features: {', '.join(order)} | f_split={float(f_split):.1f}")
+    head = f"features: {', '.join(order)} | f_split={float(f_split):.1f}"
+    if header_extra:
+        head += " | " + header_extra
+    lines.append(head)
     lines.append("")
 
     for cid in sorted(clusters.keys()):
         group = clusters[cid]
 
-        # moyennes
         mat = np.array([g.as_row(order) for g in group], dtype=float)
         means = np.nanmean(mat, axis=0)
 
-        means_s = " | ".join(
-            f"{k}={fmt(v, '.3g')}" if k not in ("E_int",) else f"{k}={fmt(v, '.3g')}"
-            for k, v in zip(order, means)
-        )
+        means_s = " | ".join(f"{k}={fmt(v, '.3g')}" for k, v in zip(order, means))
         lines.append(f"=== CLUSTER {cid} ({len(group)}) ===")
         lines.append("means: " + means_s)
         lines.append("Event | logE | nu_mean | frac_bw | Q_eff | R_LH")
         lines.append("-|-|-|-|-|-")
 
-        # tri: par nu_mean puis logE (comme un “profil”)
         group_sorted = sorted(group, key=lambda g: (g.nu_mean, g.logE))
-
         for g in group_sorted:
             lines.append(
                 f"{g.event} | "
@@ -207,14 +227,25 @@ def write_clusters_report(
         f.write("\n".join(lines))
 
 
+# -----------------------
+# Main
+# -----------------------
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--glob", default="results/GW*.json", help="pattern des JSON results")
-    ap.add_argument("--k", type=int, default=4, help="nombre de clusters KMeans")
+    ap.add_argument("--k", type=int, default=4, help="nombre de clusters KMeans (sur inliers)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--f-split", type=float, default=150.0, help="split Hz pour R_LH")
-    ap.add_argument("--pca", type=int, default=2, help="PCA dim (0 = pas de PCA)")
-    ap.add_argument("--out", default="clusters_kmeans.txt")
+
+    # DBSCAN (filtre outliers)
+    ap.add_argument("--db-eps", type=float, default=1.4, help="DBSCAN eps (en espace standardisé)")
+    ap.add_argument("--db-min-samples", type=int, default=3, help="DBSCAN min_samples")
+
+    # PCA optionnelle pour KMeans (pas pour DBSCAN)
+    ap.add_argument("--pca", type=int, default=0, help="PCA dim pour KMeans (0 = pas de PCA)")
+
+    ap.add_argument("--out", default="clusters_dbscan_kmeans.txt")
     ap.add_argument("--csv", default=None, help="optionnel: export features+label en CSV")
     args = ap.parse_args()
 
@@ -228,8 +259,8 @@ def main() -> None:
         if ft is not None:
             feats.append(ft)
 
-    if len(feats) < max(2, args.k):
-        raise SystemExit(f"[FATAL] not enough events for k={args.k} (n={len(feats)})")
+    if len(feats) < 2:
+        raise SystemExit(f"[FATAL] not enough events (n={len(feats)})")
 
     order = ["logE", "nu_mean", "nu_peak", "nu_invf", "frac_bw", "Q_eff", "peak_rel", "R_LH"]
 
@@ -244,29 +275,59 @@ def main() -> None:
         col[~m] = med
         X2[:, j] = col
 
+    # Standardisation globale
     scaler = StandardScaler()
     Z = scaler.fit_transform(X2)
 
-    if args.pca and args.pca > 0:
+    # (1) DBSCAN pour écrémer les outliers
+    db = DBSCAN(eps=float(args.db_eps), min_samples=int(args.db_min_samples))
+    labels_db = db.fit_predict(Z)
+    inlier_mask = labels_db != -1
+
+    n_in = int(inlier_mask.sum())
+    n_out = int((~inlier_mask).sum())
+    if n_in < max(2, int(args.k)):
+        raise SystemExit(
+            f"[FATAL] not enough inliers after DBSCAN for k={args.k} "
+            f"(inliers={n_in}, outliers={n_out}). "
+            f"Try increasing --db-eps or decreasing --db-min-samples."
+        )
+
+    # (2) KMeans sur les inliers uniquement (éventuellement en PCA)
+    Z_in = Z[inlier_mask]
+    if args.pca and int(args.pca) > 0:
         pca = PCA(n_components=int(args.pca), random_state=int(args.seed))
-        Zc = pca.fit_transform(Z)
+        Zk_in = pca.fit_transform(Z_in)
     else:
-        Zc = Z
+        Zk_in = Z_in
 
-    km = KMeans(n_clusters=int(args.k), random_state=int(args.seed), n_init="auto")
-    labels = km.fit_predict(Zc)
+    km = KMeans(
+        n_clusters=int(args.k),
+        random_state=int(args.seed),
+        n_init="auto",
+    )
+    labels_in = km.fit_predict(Zk_in)
 
+    # Labels finaux: -1 pour outliers, 0..k-1 pour inliers
+    labels = np.full(Z.shape[0], -1, dtype=int)
+    labels[inlier_mask] = labels_in
+
+    header_extra = (
+        f"DBSCAN(eps={args.db_eps:.3g},min_samples={int(args.db_min_samples)}) "
+        f"-> inliers={n_in} outliers={n_out} ; "
+        f"KMeans(k={int(args.k)})"
+    )
     write_clusters_report(
         out_path=args.out,
         feats=feats,
         labels=labels,
         order=order,
         f_split=args.f_split,
+        header_extra=header_extra,
     )
-    print(f"[OK] wrote {args.out} (n={len(feats)} k={args.k} pca={args.pca})")
+    print(f"[OK] wrote {args.out} (n={len(feats)} inliers={n_in} outliers={n_out} k={args.k} pca={args.pca})")
 
     if args.csv:
-        # CSV simple: event, label, puis features
         import csv
         with open(args.csv, "w", newline="") as f:
             w = csv.writer(f)

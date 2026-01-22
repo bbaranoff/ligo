@@ -679,7 +679,6 @@ def calibrate_least_squares(
                 bands=bands,
                 hstar_in=1.0,
                 scale_ej_in=1.0,
-                peak_norm=False,
                 plot=False,
                 return_internals=True,
                 **analyze_kwargs,
