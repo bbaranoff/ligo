@@ -54,8 +54,8 @@ M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
 
 DEFAULT_HSTAR = 1.0
-DEFAULT_SCALE_EJ = 1.0
-
+DEFAULT_SCALE_EJ = 4.3e37
+NORM_EJ=4.3e37
 # ------------------
 # IO params
 # ------------------
@@ -464,7 +464,7 @@ def analyze_event(
     y_tau = safe_bandpass(seg_tau_L, fs, tb0, tb1)
     tau_hl = estimate_delay_time(x_tau, y_tau, fs, max_delay_ms=15.0)
     tau_hl = -abs(float(tau_hl))
-
+    tau_hl_cal = float(hstar_in) * tau_hl
     # -----------------------------
     # 4) Signal segment
     # -----------------------------
@@ -474,8 +474,8 @@ def analyze_event(
     hL_raw = np.asarray(tsL.crop(s0, s1).value, float)
 
     # Apply H_STAR
-    hH = hH_raw * float(hstar_in)
-    hL = hL_raw * float(hstar_in)
+    hH = hH_raw
+    hL = hL_raw
 
     # Bandpass for analysis band
     hH_f = safe_bandpass(hH, fs, flow, fhigh)
@@ -541,46 +541,65 @@ def analyze_event(
 
     dEdf = (np.abs(Hc) ** 2) * psi2
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
-    E_internal = float(trapezoid(dEdf, f_use))
+    # calcul interne (ne jamais modifier après)
+    # -------------------------------------------------
+    # Énergie spectrale (base immuable)
+    # -------------------------------------------------
+    E_internal = float(trapezoid(dEdf, f_use))*NORM_EJ
+    energy_J = float(E_internal * scale_ej_in)
 
-    if E_internal <= 0.0 or not np.any(dEdf > 0):
-        bw_all = bw_nu = {"dnu_80": 0.0, "sigma_f": 0.0, "f10": 0.0, "f90": 0.0}
+    # -------------------------------------------------
+    # Bandwidths & nu_eff
+    # -------------------------------------------------
+    if energy_J <= 0.0 or not np.any(dEdf > 0):
+        bw_all = bw_nu = {
+            "f10": np.nan, "f50": np.nan, "f90": np.nan,
+            "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan,
+        }
     else:
         bw_all = spectral_bandwidth_features(f_use, dEdf)
 
     nb0, nb1 = bands.nu_band
     mask_nu = (f_use >= nb0) & (f_use <= nb1)
-    bw_nu = spectral_bandwidth_features(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else {
-        "f10": np.nan, "f50": np.nan, "f90": np.nan,
-        "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan
-    }
 
-    # Apply SCALE_EJ
-    E_total = float(E_internal * float(scale_ej_in))
-    m_sun_val = float(E_total / (M_sun * c * c))
+    bw_nu = (
+        spectral_bandwidth_features(f_use[mask_nu], dEdf[mask_nu])
+        if np.any(mask_nu)
+        else {
+            "f10": np.nan, "f50": np.nan, "f90": np.nan,
+            "dnu_80": np.nan, "mu_f": np.nan, "sigma_f": np.nan,
+        }
+    )
 
     nu_eff = nu_eff_energy(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else 0.0
     nu_eff_raw = nu_eff_energy(f_use, dEdf)
 
-    # For LSQ: just internals
+    # -------------------------------------------------
+    # Mass equivalent
+    # -------------------------------------------------
+    E_total = float(energy_J)
+    m_sun_val = float(E_total / (M_sun * c * c))
+
+    # -------------------------------------------------
+    # LSQ / calibration mode (internals only)
+    # -------------------------------------------------
     if return_internals:
         hL_cal = safe_bandpass(hL_raw, fs, tb0, tb1)
         peak_raw = robust_peak(hL_cal, peak_quantile)
-
-        # "power-like" observable (quadratic, stable): mean square in tau band
         pwr_raw = float(np.mean(hL_cal * hL_cal))
 
         return {
             "event": event,
-            "E_internal": float(E_internal),
+            "E_internal": float(E_internal),   # ✅ BRUT
+            "energy_J": float(energy_J),       # ✅ CALIBRÉ
             "peak_raw": float(peak_raw),
             "pwr_raw": float(pwr_raw),
-            "m_sun_obs": float(m_sun_val),
         }
 
+    # -------------------------------------------------
+    # FULL OUTPUT
+    # -------------------------------------------------
     out = {
-        "bw_all": bw_all,
-        "bw_nu": bw_nu,
         "event": event,
         "gps": float(gps),
         "distance_mpc": float(distance_mpc),
@@ -589,59 +608,32 @@ def analyze_event(
         "fhigh_Hz": float(fhigh),
         "tau_band_Hz": [float(tb0), float(tb1)],
         "nu_band_Hz": [float(nb0), float(nb1)],
-        "tau_hl_s": float(tau_hl),
-        "peak_quantile": float(peak_quantile),
-        "peak_norm": bool(peak_norm),
-        "peak_ref": float(peak_ref),
+        "tau_hl_s": float(tau_hl_cal),
         "H_STAR": float(hstar_in),
         "SCALE_EJ": float(scale_ej_in),
         "E_internal": float(E_internal),
-        "E_total_J": float(E_total),
+        "energy_J": float(energy_J),
         "m_sun": float(m_sun_val),
         "nu_eff": {
             "nu_eff_energy": float(nu_eff),
             "nu_eff_energy_raw": float(nu_eff_raw),
         },
+        "bw_all": bw_all,
+        "bw_nu": bw_nu,
         "freq_Hz": f_use.tolist(),
         "dEdf_internal": dEdf.tolist(),
     }
 
     os.makedirs("results", exist_ok=True)
-    with open(os.path.join("results", f"{event}.json"), "w") as fjson:
-        json.dump(out, fjson, indent=2)
+    with open(os.path.join("results", f"{event}.json"), "w") as f:
+        json.dump(out, f, indent=2)
 
     print(f"=== ANALYSE SPECTRALE {event} ===")
-    print(f"GPS: {gps}")
-    print(f"Distance: {distance_mpc} Mpc")
-    print(f"Tau (H1-L1): {tau_hl:.6e} s")
-    print(f"Energie intrins. (J): {E_total:.3e}  ({m_sun_val:.6f} M_sun)")
-    print(f"nu_eff (energy): {nu_eff:.2f} Hz (raw: {nu_eff_raw:.2f} Hz)")
-
-    if plot:
-        import matplotlib.pyplot as plt
-        os.makedirs("plots", exist_ok=True)
-        plt.figure(figsize=(10, 6))
-        plt.loglog(f_use, np.maximum(dEdf, 1e-80), lw=1.4, label=f"{event}")
-
-        f_log = np.geomspace(max(f_use[0], 1e-6), f_use[-1], 500)
-        d_log = np.interp(f_log, f_use, np.maximum(dEdf, 1e-80))
-        log_smooth = gaussian_filter1d(np.log10(d_log), sigma=2)
-        plt.loglog(f_log, 10 ** log_smooth, "--", lw=1.2, alpha=0.8, label="smoothed")
-
-        if nu_eff > 0:
-            plt.axvline(x=nu_eff, linestyle=":", lw=1.0, label=f"nu_eff={nu_eff:.1f} Hz")
-
-        plt.xlabel("Frequence (Hz)")
-        plt.ylabel("dE/df (interne)")
-        plt.title(f"Spectre coherent H1-L1 - {event}")
-        plt.grid(True, which="both", alpha=0.25, linestyle="--")
-        plt.legend()
-        out_plot = os.path.join("plots", f"{event}_spectre.png")
-        plt.savefig(out_plot, dpi=200, bbox_inches="tight")
-        plt.close()
-        print("[plot]", out_plot)
+    print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
+    print(f"nu_eff  = {nu_eff:.2f} Hz")
 
     return out
+
 
 
 def calibrate_least_squares(
@@ -663,7 +655,7 @@ def calibrate_least_squares(
     print("\n🔧 Calibration par moindres carrés...")
     print(f"Événements: {len(events)}")
     
-    # Étape 1: Collecter les y_model (E_internal avec H_STAR=1, SCALE_EJ=1)
+    # Étape 1: Collecter les y_model (energy_J avec H_STAR=1, SCALE_EJ=1)
     data = []
     for ev in events:
         if ev not in y_obs_dict:
@@ -691,11 +683,11 @@ def calibrate_least_squares(
             print(f"[WARN] skip {ev}: analyze_event failed (gps={g}): {e}")
             continue
 
-        y_model = float(intern.get("E_internal", 0.0))
+        y_model = float(intern.get("energy_J", 0.0))
         peak_raw = float(intern.get("peak_raw", 0.0))
 
         if (not np.isfinite(y_model)) or y_model <= 0.0:
-            print(f"[WARN] skip {ev}: E_internal invalid ({y_model})")
+            print(f"[WARN] skip {ev}: energy_J invalid ({y_model})")
             continue
 
         data.append((ev, yobs, y_model, peak_raw))
@@ -706,7 +698,7 @@ def calibrate_least_squares(
     # Vecteurs
     evs = [t[0] for t in data]
     y_obs = np.array([t[1] for t in data], dtype=float)   # "vérité" (ex: M_sun ou J selon ton dict)
-    y_mod = np.array([t[2] for t in data], dtype=float)   # E_internal (H_STAR=1, SCALE_EJ=1)
+    y_mod = np.array([t[2] for t in data], dtype=float)   # energy_J (H_STAR=1, SCALE_EJ=1)
     p_raw = np.array([t[3] for t in data], dtype=float)   # peak_raw (utile si tu veux lever la dégénérescence)
 
     # --------------------------------------------

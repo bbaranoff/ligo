@@ -226,6 +226,50 @@ def write_clusters_report(
     with open(out_path, "w") as f:
         f.write("\n".join(lines))
 
+def write_clusters_json(
+    out_path: str,
+    feats: List[Features],
+    labels: np.ndarray,
+    order: List[str],
+):
+    clusters = {}
+    labels_map = {}
+
+    for ft, lab in zip(feats, labels):
+        cid = int(lab)
+        labels_map[ft.event] = cid
+        clusters.setdefault(cid, []).append(ft)
+
+    out = {
+        "labels": labels_map,
+        "clusters": {}
+    }
+
+    for cid, group in clusters.items():
+        mat = np.array([g.as_row(order) for g in group], dtype=float)
+        means = np.nanmean(mat, axis=0)
+
+        out["clusters"][str(cid)] = {
+            "means": {
+                k: float(v) for k, v in zip(order, means)
+            },
+            "events": {
+                g.event: {
+                    "logE": g.logE,
+                    "nu_mean": g.nu_mean,
+                    "nu_peak": g.nu_peak,
+                    "nu_invf": g.nu_invf,
+                    "frac_bw": g.frac_bw,
+                    "Q_eff": g.Q_eff,
+                    "peak_rel": g.peak_rel,
+                    "R_LH": g.R_LH,
+                }
+                for g in group
+            }
+        }
+
+    with open(out_path, "w") as f:
+        json.dump(out, f, indent=2)
 
 # -----------------------
 # Main
@@ -237,7 +281,7 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=4, help="nombre de clusters KMeans (sur inliers)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--f-split", type=float, default=150.0, help="split Hz pour R_LH")
-
+    ap.add_argument("--json", default=None, help="export clusters + means en JSON")
     # DBSCAN (filtre outliers)
     ap.add_argument("--db-eps", type=float, default=1.4, help="DBSCAN eps (en espace standardisé)")
     ap.add_argument("--db-min-samples", type=int, default=3, help="DBSCAN min_samples")
@@ -326,6 +370,14 @@ def main() -> None:
         header_extra=header_extra,
     )
     print(f"[OK] wrote {args.out} (n={len(feats)} inliers={n_in} outliers={n_out} k={args.k} pca={args.pca})")
+    if args.json:
+        write_clusters_json(
+            out_path=args.json,
+            feats=feats,
+            labels=labels,
+            order=order,
+        )
+        print(f"[OK] wrote {args.json}")
 
     if args.csv:
         import csv
