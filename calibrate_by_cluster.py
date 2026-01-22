@@ -5,577 +5,491 @@
 Calibration cluster-by-cluster pour LIGO spectral analysis
 
 Pipeline:
-1) Charge les features depuis results/GW*.json
-2) Clustering (DBSCAN -> outliers ; KMeans -> clusters inliers)
-3) Calibre (H_STAR, SCALE_EJ) par cluster via LSQ (clé dégénérée K = H_STAR*SCALE_EJ)
-4) Ré-analyse tous les événements avec la calibration de leur cluster
-5) Génère un rapport comparatif
+1) Charge refs + event_params
+2) Calcule features en appelant analyze_event(return_internals=True)
+3) Clustering: DBSCAN -> outliers (-1) + KMeans sur inliers (k clusters)
+4) Calibration LSQ par cluster: fit K = H_STAR*SCALE_EJ (dégénéré)
+5) Ré-analyse et produit un tableau final avec erreurs (%)
 
-Usage:
-  python calibrate_by_cluster.py --refs ligo_refs.json --event-params event_params.json
+Important:
+- On passe peak_norm / peak_quantile UNE SEULE FOIS (jamais via **kwargs).
+- Si --k 0 : pas de KMeans -> tous les inliers reçoivent cluster=0.
 """
-
-from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
+import math
+import os
+from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 
-# modules locaux
-import cluster_latent_kmeans as clk
-import ligo_spectral_planck as lsp
+# sklearn (DBSCAN/KMeans)
+from sklearn.cluster import DBSCAN, KMeans
+from sklearn.preprocessing import StandardScaler
+
+import ligo_spectral_planck  # doit être dans le même dossier / PYTHONPATH
 
 
-# ----------------------------
+# -------------------------
+# Utils
+# -------------------------
+
+def jload(path: str) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def jdump(path: str, obj: Any) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+
+def isfinite_pos(x: float) -> bool:
+    return np.isfinite(x) and x > 0.0
+
+def fmt_sci(x: float) -> str:
+    if not np.isfinite(x):
+        return "nan"
+    return f"{x:.3e}"
+
+def signed_pct(err: float) -> str:
+    # err already in percent
+    sign = "+" if err >= 0 else "-"
+    return f"{sign}{abs(err):.2f}"
+
+def rel_err_pct(pred: float, ref: float) -> float:
+    # signed relative error: (pred-ref)/ref *100
+    if not isfinite_pos(ref):
+        return float("nan")
+    return 100.0 * (pred - ref) / ref
+
+
+# -------------------------
+# Feature extraction
+# -------------------------
+
+FEATURE_KEYS = ["logE", "nu_mean", "nu_peak", "nu_invf", "frac_bw", "Q_eff", "peak_rel", "R_LH"]
+
+def extract_features_from_internals(intern: Dict[str, Any]) -> Dict[str, float]:
+    """
+    intern = retour de analyze_event(..., return_internals=True)
+    Doit contenir les features calculées côté ligo_spectral_planck.
+    """
+    feats = {}
+    for k in FEATURE_KEYS:
+        v = intern.get(k, None)
+        feats[k] = float(v) if v is not None and np.isfinite(v) else float("nan")
+    return feats
+
+
+# -------------------------
 # Clustering
-# ----------------------------
+# -------------------------
 
-def load_cluster_assignments(
-    results_glob: str = "results/GW*.json",
-    f_split: float = 150.0,
-    db_eps: float = 1.4,
-    db_min_samples: int = 3,
-    k: int = 4,
-    seed: int = 42,
-) -> Tuple[Dict[str, int], List[clk.Features]]:
-    """
-    Fait le clustering et retourne:
-      - event_to_cluster: {event_name: cluster_id}
-      - feats: liste de Features (dans le même ordre que le clustering)
-    """
-    import glob
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.cluster import KMeans, DBSCAN
+@dataclass
+class ClusterResult:
+    labels: Dict[str, int]          # event -> cluster_id  (-1 for outlier)
+    inliers: List[str]
+    outliers: List[str]
+    kmeans_k: int
 
-    paths = sorted(glob.glob(results_glob))
-    if not paths:
-        raise RuntimeError(f"No files matched: {results_glob}")
-
-    feats: List[clk.Features] = []
-    for p in paths:
-        ft = clk.compute_features_from_json(p, f_split=f_split)
-        if ft is not None:
-            feats.append(ft)
-
-    if len(feats) < 2:
-        raise RuntimeError(f"Not enough events (n={len(feats)})")
-
-    order = ["logE", "nu_mean", "nu_peak", "nu_invf", "frac_bw", "Q_eff", "peak_rel", "R_LH"]
-    X = np.array([f.as_row(order) for f in feats], dtype=float)
-
-    # impute NaN/inf par médiane colonne
-    X2 = X.copy()
-    for j in range(X2.shape[1]):
-        col = X2[:, j]
-        m = np.isfinite(col)
-        med = float(np.median(col[m])) if np.any(m) else 0.0
-        col[~m] = med
-        X2[:, j] = col
-
-    scaler = StandardScaler()
-    Z = scaler.fit_transform(X2)
-
-    db = DBSCAN(eps=float(db_eps), min_samples=int(db_min_samples))
-    labels_db = db.fit_predict(Z)
-    inlier_mask = labels_db != -1
-
-    n_in = int(inlier_mask.sum())
-    if n_in < max(2, int(k)):
-        raise RuntimeError(f"Not enough inliers after DBSCAN for k={k} (inliers={n_in})")
-
-    Z_in = Z[inlier_mask]
-    km = KMeans(n_clusters=int(k), random_state=int(seed), n_init="auto")
-    labels_in = km.fit_predict(Z_in)
-
-    labels = np.full(Z.shape[0], -1, dtype=int)
-    labels[inlier_mask] = labels_in
-
-    event_to_cluster = {ft.event: int(lab) for ft, lab in zip(feats, labels)}
-    print(f"[clustering] n_events={len(feats)} inliers={n_in} outliers={len(feats)-n_in} k={k}")
-    return event_to_cluster, feats
-
-
-# ----------------------------
-# Helpers: appels LSP propres
-# ----------------------------
-
-def _analyze_event_safe(
-    *,
-    event: str,
-    params: Dict,
-    bands: lsp.Bands,
-    flow: Optional[float],
-    fhigh: Optional[float],
-    signal_win: Optional[float],
-    noise_pad: Optional[float],
-    distance_mpc: Optional[float],
-    use_virgo: bool,
-    peak_norm: bool,
-    peak_quantile: float,
-    hstar_in: float,
-    scale_ej_in: float,
-) -> Dict:
-    """
-    Appelle lsp.analyze_event avec une signature 100% explicite.
-    => zéro risque de "multiple values for keyword argument".
-    """
-    return lsp.analyze_event(
-        event=event,
-        params=params,
-        bands=bands,
-        flow=flow,
-        fhigh=fhigh,
-        signal_win=signal_win,
-        noise_pad=noise_pad,
-        distance_mpc=distance_mpc,
-        use_virgo=use_virgo,
-        peak_norm=peak_norm,
-        peak_quantile=peak_quantile,
-        hstar_in=hstar_in,
-        scale_ej_in=scale_ej_in,
-        plot=False,
-        return_internals=False,
-    )
-
-
-def _calibrate_lsq_safe(
-    *,
+def cluster_events(
     events: List[str],
-    params: Dict,
-    y_obs_dict: Dict[str, float],
-    bands: lsp.Bands,
-    flow: Optional[float],
-    fhigh: Optional[float],
-    signal_win: Optional[float],
-    noise_pad: Optional[float],
-    distance_mpc: Optional[float],
-    use_virgo: bool,
-    peak_norm: bool,
-    peak_quantile: float,
-) -> Tuple[float, float]:
+    feats_by_event: Dict[str, Dict[str, float]],
+    db_eps: float,
+    db_min_samples: int,
+    k: int,
+    seed: int
+) -> ClusterResult:
     """
-    Appelle lsp.calibrate_least_squares avec params explicites.
+    DBSCAN sur features standardisées.
+    - Outliers => label -1
+    - Inliers => si k>0 : KMeans(k) sur inliers, labels 0..k-1
+                si k==0 : tous les inliers label 0
     """
-    return lsp.calibrate_least_squares(
-        events=events,
-        params=params,
-        y_obs_dict=y_obs_dict,
-        bands=bands,
-        flow=flow,
-        fhigh=fhigh,
-        signal_win=signal_win,
-        noise_pad=noise_pad,
-        distance_mpc=distance_mpc,
-        use_virgo=use_virgo,
-        peak_norm=peak_norm,
-        peak_quantile=peak_quantile,
-    )
+    X = []
+    kept = []
+    for ev in events:
+        f = feats_by_event.get(ev, {})
+        row = [f.get(key, float("nan")) for key in FEATURE_KEYS]
+        if not all(np.isfinite(row)):
+            continue
+        X.append(row)
+        kept.append(ev)
+
+    if len(kept) < max(db_min_samples, 2):
+        raise RuntimeError(f"Pas assez d'events avec features valides pour clusteriser (n={len(kept)}).")
+
+    X = np.asarray(X, float)
+    Xs = StandardScaler().fit_transform(X)
+
+    db = DBSCAN(eps=db_eps, min_samples=db_min_samples)
+    db_labels = db.fit_predict(Xs)  # -1 outliers, else cluster id (DBSCAN internal)
+
+    inliers = [kept[i] for i, lab in enumerate(db_labels) if lab != -1]
+    outliers = [kept[i] for i, lab in enumerate(db_labels) if lab == -1]
+
+    labels: Dict[str, int] = {}
+    for ev in outliers:
+        labels[ev] = -1
+
+    # If no inliers, we keep everything as -1
+    if len(inliers) == 0:
+        return ClusterResult(labels=labels, inliers=[], outliers=outliers, kmeans_k=0)
+
+    if k <= 0:
+        for ev in inliers:
+            labels[ev] = 0
+        return ClusterResult(labels=labels, inliers=inliers, outliers=outliers, kmeans_k=0)
+
+    # KMeans on inliers
+    Xin = np.asarray([Xs[kept.index(ev)] for ev in inliers], float)
+    km = KMeans(n_clusters=k, random_state=seed, n_init="auto")
+    km_lab = km.fit_predict(Xin)
+
+    for ev, lab in zip(inliers, km_lab):
+        labels[ev] = int(lab)
+
+    return ClusterResult(labels=labels, inliers=inliers, outliers=outliers, kmeans_k=k)
 
 
-# ----------------------------
-# Calibration par cluster
-# ----------------------------
+# -------------------------
+# Calibration LSQ
+# -------------------------
 
-def calibrate_cluster(
-    *,
-    cluster_id: int,
+def calibrate_lsq_K(
     events: List[str],
-    params: Dict,
     y_obs_dict: Dict[str, float],
-    bands: lsp.Bands,
-    flow: Optional[float],
-    fhigh: Optional[float],
-    signal_win: Optional[float],
-    noise_pad: Optional[float],
-    distance_mpc: Optional[float],
-    use_virgo: bool,
+    params: Dict[str, Any],
+    bands: Dict[str, Tuple[float, float]],
+    analyze_common: Dict[str, Any],
     peak_norm: bool,
     peak_quantile: float,
-) -> Tuple[float, float]:
+    use_virgo: bool
+) -> Tuple[float, float, Dict[str, float]]:
     """
-    Calibre H_STAR et SCALE_EJ pour un cluster donné.
-    Retourne (hstar, scale_ej).
+    Fit K = H_STAR*SCALE_EJ, en minimisant sum((y_obs - K*y_model)^2)
+    où y_model = Energie interne calculée avec hstar_in=1 scale_ej_in=1.
+
+    Retour:
+      H_STAR (choisi 1), SCALE_EJ (=K_hat), stats dict
     """
-    print(f"\n{'='*70}")
-    print(f"📊 CALIBRATION CLUSTER {cluster_id} ({len(events)} events)")
-    print(f"{'='*70}")
+    y_models = []
+    y_obs = []
+    used = []
 
-    valid_events = [e for e in events if e in y_obs_dict]
-    if len(valid_events) < 2:
-        print(f"[WARN] Cluster {cluster_id}: pas assez d'events avec refs ({len(valid_events)})")
-        print("       -> using default calibration (H_STAR=1.0, SCALE_EJ=1.0)")
-        return 1.0, 1.0
+    for ev in events:
+        yref = y_obs_dict.get(ev, None)
+        if yref is None or (not isfinite_pos(float(yref))):
+            continue
 
-    try:
-        hstar, scale_ej = _calibrate_lsq_safe(
-            events=valid_events,
-            params=params,
-            y_obs_dict=y_obs_dict,
-            bands=bands,
-            flow=flow,
-            fhigh=fhigh,
-            signal_win=signal_win,
-            noise_pad=noise_pad,
-            distance_mpc=distance_mpc,
-            use_virgo=use_virgo,
-            peak_norm=peak_norm,
-            peak_quantile=peak_quantile,
-        )
-        print(f"✅ Cluster {cluster_id}: H_STAR={hstar:.6e}, SCALE_EJ={scale_ej:.6e}")
-        return float(hstar), float(scale_ej)
-    except Exception as e:
-        print(f"[ERROR] Cluster {cluster_id} calibration failed: {e}")
-        print("        -> using default calibration")
-        return 1.0, 1.0
-
-
-def analyze_with_cluster_calibration(
-    *,
-    event: str,
-    cluster_id: int,
-    hstar: float,
-    scale_ej: float,
-    params: Dict,
-    bands: lsp.Bands,
-    flow: Optional[float],
-    fhigh: Optional[float],
-    signal_win: Optional[float],
-    noise_pad: Optional[float],
-    distance_mpc: Optional[float],
-    use_virgo: bool,
-    peak_norm: bool,
-    peak_quantile: float,
-) -> Optional[Dict]:
-    """
-    Analyse un événement avec la calibration de son cluster.
-    """
-    try:
-        return _analyze_event_safe(
-            event=event,
-            params=params,
-            bands=bands,
-            flow=flow,
-            fhigh=fhigh,
-            signal_win=signal_win,
-            noise_pad=noise_pad,
-            distance_mpc=distance_mpc,
-            use_virgo=use_virgo,
-            peak_norm=peak_norm,
-            peak_quantile=peak_quantile,
-            hstar_in=hstar,
-            scale_ej_in=scale_ej,
-        )
-    except Exception as e:
-        gps = None
         try:
-            gps = params.get(event, {}).get("gps")
-        except Exception:
-            pass
-        if gps is not None:
-            print(f"[WARN] skip {event}: analyze_event failed (gps={gps}): {e}")
-        else:
-            print(f"[WARN] skip {event}: analyze_event failed: {e}")
-        return None
-
-
-# ----------------------------
-# Erreurs / reporting
-# ----------------------------
-
-def compute_errors(
-    results: Dict[str, Dict],
-    refs: Dict[str, Dict],
-    ref_key: str = "energy_J",
-) -> Dict[str, float]:
-    """
-    Erreur relative (%) signée: 100*(calc-ref)/ref
-    """
-    errors: Dict[str, float] = {}
-    for event, res in results.items():
-        ref = refs.get(event)
-        if not isinstance(ref, dict):
+            intern = ligo_spectral_planck.analyze_event(
+                event=ev,
+                params=params,
+                bands=bands,
+                use_virgo=use_virgo,
+                peak_norm=peak_norm,
+                peak_quantile=peak_quantile,
+                hstar_in=1.0,
+                scale_ej_in=1.0,
+                plot=False,
+                return_internals=True,
+                **analyze_common,
+            )
+        except Exception as e:
+            gps = params.get(ev, {}).get("gps_time", "NA")
+            print(f"[WARN] skip {ev}: analyze_event failed (gps={gps}): {e}")
             continue
 
-        E_calc = res.get("E_total_J")
-        E_ref = ref.get(ref_key)
-        if E_calc is None or E_ref is None:
+        # l'énergie interne doit être dans intern["energy_J"] (ou similaire)
+        em = intern.get("energy_J", None)
+        if em is None or (not isfinite_pos(float(em))):
             continue
 
-        E_calc = float(E_calc)
-        E_ref = float(E_ref)
-        if not np.isfinite(E_calc) or not np.isfinite(E_ref) or E_ref <= 0:
-            continue
+        y_models.append(float(em))
+        y_obs.append(float(yref))
+        used.append(ev)
 
-        errors[event] = 100.0 * (E_calc - E_ref) / E_ref
+    if len(used) < 2:
+        raise RuntimeError(f"[FATAL] Pas assez d'events valides pour LSQ (n={len(used)})")
 
-    return errors
+    y_models = np.asarray(y_models, float)
+    y_obs = np.asarray(y_obs, float)
 
+    # Fit K in least squares: y_obs ~ K * y_model
+    # K_hat = (y_model^T y_obs) / (y_model^T y_model)
+    denom = float(np.dot(y_models, y_models))
+    if denom <= 0:
+        raise RuntimeError("[FATAL] denom <= 0 dans LSQ")
 
-def write_report(
-    out_path: str,
-    event_to_cluster: Dict[str, int],
-    cluster_calib: Dict[int, Tuple[float, float]],
-    results: Dict[str, Dict],
-    errors: Dict[str, float],
-    refs: Dict[str, Dict],
-    ref_key: str,
-) -> None:
-    clusters = defaultdict(list)
-    for event, cid in event_to_cluster.items():
-        clusters[cid].append(event)
+    K_hat = float(np.dot(y_models, y_obs)) / denom
 
-    lines: List[str] = []
-    lines.append("=" * 100)
-    lines.append("CALIBRATION PAR CLUSTER - RAPPORT DÉTAILLÉ")
-    lines.append("=" * 100)
-    lines.append("")
+    # Errors (relative)
+    y_pred = K_hat * y_models
+    rel = np.abs((y_pred - y_obs) / y_obs)
+    stats = {
+        "events_used": len(used),
+        "K_hat": K_hat,
+        "rel_MAE": float(np.mean(rel) * 100.0),
+        "rel_MED": float(np.median(rel) * 100.0),
+    }
 
-    abs_errs = [abs(v) for v in errors.values()]
-    if abs_errs:
-        lines.append("📊 STATISTIQUES GLOBALES")
-        lines.append(f"   MAE (abs) : {np.mean(abs_errs):.2f}%")
-        lines.append(f"   Médiane   : {np.median(abs_errs):.2f}%")
-        lines.append(f"   N         : {len(abs_errs)}")
-        lines.append("")
-
-    for cid in sorted(clusters.keys()):
-        evs = sorted(clusters[cid])
-        hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0))
-
-        lines.append("")
-        lines.append("=" * 100)
-        lines.append(f"CLUSTER {cid} ({len(evs)} événements)")
-        lines.append("=" * 100)
-        lines.append(f"Calibration: H_STAR={hstar:.6e} SCALE_EJ={scale_ej:.6e} K={hstar*scale_ej:.6e}")
-        lines.append("")
-
-        ce = [abs(errors[e]) for e in evs if e in errors]
-        if ce:
-            lines.append("📈 Statistiques:")
-            lines.append(f"   MAE     : {np.mean(ce):.2f}%")
-            lines.append(f"   Médiane : {np.median(ce):.2f}%")
-            lines.append(f"   Min/Max : {min(ce):.2f}% / {max(ce):.2f}%")
-            lines.append("")
-
-        lines.append(f"Event                | E_calc [{ref_key}] | E_ref [{ref_key}]  | err(%)  | m_sun(calc) | msun(ref)")
-        lines.append("-" * 100)
-
-        for e in evs:
-            res = results.get(e)
-            ref = refs.get(e, {})
-            if not res or not isinstance(ref, dict):
-                lines.append(f"{e:20} | [no data]")
-                continue
-
-            E_calc = float(res.get("E_total_J", float("nan")))
-            E_ref = float(ref.get(ref_key, float("nan")))
-            m_calc = float(res.get("m_sun", float("nan")))
-            m_ref = float(ref.get("msun_c2", float("nan")))
-            err = errors.get(e)
-            err_s = f"{err:+7.2f}" if err is not None else "  N/A  "
-            lines.append(f"{e:20} | {E_calc:>12.3e} | {E_ref:>12.3e} | {err_s:>7} | {m_calc:>10.3f} | {m_ref:>8.3f}")
-
-    with open(out_path, "w") as f:
-        f.write("\n".join(lines))
-    print(f"\n✅ Rapport écrit: {out_path}")
+    # degenerate: choose H_STAR=1 ; SCALE_EJ=K
+    return 1.0, K_hat, stats
 
 
-# ----------------------------
+# -------------------------
 # Main
-# ----------------------------
+# -------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Calibration cluster-by-cluster pour LIGO spectral analysis")
-
     ap.add_argument("--refs", required=True, help="JSON refs LIGO (ligo_refs.json)")
     ap.add_argument("--event-params", default="event_params.json", help="JSON params events")
-    ap.add_argument("--results-glob", default="results/GW*.json", help="Pattern des JSON results")
+    ap.add_argument("--peak-norm", action="store_true", help="Normalise l'amplitude sur le pic")
+    ap.add_argument("--peak-quantile", type=float, default=0.999)
 
-    # IMPORTANT: peak_norm est un bool de comportement pipeline (comme ton run_all)
-    ap.add_argument("--peak-norm", action="store_true",
-                    help="Normalise l'amplitude sur le pic (même comportement que run_all.sh)")
-    ap.add_argument("--peak-quantile", type=float, default=99.5)
-
-    # clustering
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--db-eps", type=float, default=1.4)
     ap.add_argument("--db-min-samples", type=int, default=3)
-    ap.add_argument("--f-split", type=float, default=150.0)
-    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--f-split", type=float, default=150.0)  # si utilisé en interne pour features
 
-    # analysis knobs
-    ap.add_argument("--flow", type=float, default=None)
-    ap.add_argument("--fhigh", type=float, default=None)
-    ap.add_argument("--tau-band", type=float, nargs=2, default=[35.0, 250.0])
-    ap.add_argument("--nu-band", type=float, nargs=2, default=[30.0, 350.0])
+    ap.add_argument("--seed", type=int, default=123)
+
+    ap.add_argument("--flow", type=float, default=20.0)
+    ap.add_argument("--fhigh", type=float, default=600.0)
+    ap.add_argument("--tau-band", type=float, nargs=2, default=[30.0, 400.0])
+    ap.add_argument("--nu-band", type=float, nargs=2, default=[20.0, 600.0])
     ap.add_argument("--no-virgo", action="store_true")
-    ap.add_argument("--signal-win", type=float, default=None)
-    ap.add_argument("--noise-pad", type=float, default=None)
-    ap.add_argument("--distance-mpc", type=float, default=None)
 
-    # output
-    ap.add_argument("--out", default="calibration_by_cluster.txt")
-    ap.add_argument("--calib-json", default="cluster_calibrations.json")
-    ap.add_argument("--ref-key", default="energy_J", choices=["energy_J", "msun_c2"])
+    ap.add_argument("--signal-win", type=float, default=0.8)
+    ap.add_argument("--noise-pad", type=float, default=900.0)
+    ap.add_argument("--distance-mpc", type=float, default=410.0)
+
+    ap.add_argument("--out", default="cluster_calibrations.json")
+    ap.add_argument("--ref-key", choices=["energy_J", "msun_c2"], default="energy_J")
     ap.add_argument("--exclude-cls", nargs="*", default=[])
     ap.add_argument("--exclude-cluster-minus1", action="store_true",
                     help="Exclure cluster -1 de la calibration (utilise défaut 1,1)")
-
     args = ap.parse_args()
 
-    # refs
-    print("📚 Chargement des références...")
-    with open(args.refs, "r") as f:
-        refs = json.load(f)
+    refs = jload(args.refs)
+    params = jload(args.event_params)
 
-    exclude = set(args.exclude_cls)
+    # y_obs_dict from refs
     y_obs_dict: Dict[str, float] = {}
-    for ev, d in refs.items():
-        if not isinstance(d, dict):
+    for r in refs:
+        ev = r.get("event", None) or r.get("name", None)
+        if not ev:
             continue
-        if exclude and d.get("cls", "") in exclude:
+        cls = r.get("cls", None)
+        if cls in set(args.exclude_cls):
             continue
-        v = d.get(args.ref_key)
-        if v is None:
+        y = r.get(args.ref_key, None)
+        if y is None:
             continue
-        fv = float(v)
-        if not np.isfinite(fv) or fv <= 0:
+        try:
+            y = float(y)
+        except Exception:
             continue
-        y_obs_dict[ev] = fv
+        if not isfinite_pos(y):
+            continue
+        y_obs_dict[ev] = y
 
+    # events available
+    events = [ev for ev in y_obs_dict.keys() if ev in params]
+    events = sorted(events)
+
+    print("📚 Chargement des références...")
     print(f"   Références chargées: {len(refs)} total, {len(y_obs_dict)} valides")
-
-    # params
     print("\n📋 Chargement des paramètres d'événements...")
-    params = lsp.load_event_params(args.event_params)
     print(f"   Événements dans params: {len(params)}")
-
-    # clustering
     print("\n🔍 Clustering des événements...")
-    event_to_cluster, _feats = load_cluster_assignments(
-        results_glob=args.results_glob,
-        f_split=args.f_split,
-        db_eps=args.db_eps,
-        db_min_samples=args.db_min_samples,
-        k=args.k,
-        seed=args.seed,
+
+    # Common analyze args (NE PAS inclure peak_norm/peak_quantile ici)
+    analyze_common = dict(
+        flow=float(args.flow),
+        fhigh=float(args.fhigh),
+        signal_win=float(args.signal_win),
+        noise_pad=float(args.noise_pad),
+        distance_mpc=float(args.distance_mpc),
     )
 
-    clusters = defaultdict(list)
-    for ev, cid in event_to_cluster.items():
-        clusters[cid].append(ev)
-    for cid in sorted(clusters.keys()):
-        print(f"   Cluster {cid:2}: {len(clusters[cid])} événements")
-
-    # bands / analysis options
-    bands = lsp.Bands(
+    # bands (if your analyze_event uses it)
+    bands = dict(
         tau_band=(float(args.tau_band[0]), float(args.tau_band[1])),
         nu_band=(float(args.nu_band[0]), float(args.nu_band[1])),
+        f_split=float(args.f_split),
     )
 
     use_virgo = not bool(args.no_virgo)
-    peak_norm = bool(args.peak_norm)
-    peak_quantile = float(args.peak_quantile)
 
-    flow = args.flow
-    fhigh = args.fhigh
-    signal_win = args.signal_win
-    noise_pad = args.noise_pad
-    distance_mpc = args.distance_mpc
+    # compute features
+    feats_by_event: Dict[str, Dict[str, float]] = {}
+    ok_events = []
+    for ev in events:
+        try:
+            intern = ligo_spectral_planck.analyze_event(
+                event=ev,
+                params=params,
+                bands=bands,
+                use_virgo=use_virgo,
+                peak_norm=bool(args.peak_norm),
+                peak_quantile=float(args.peak_quantile),
+                hstar_in=1.0,
+                scale_ej_in=1.0,
+                plot=False,
+                return_internals=True,
+                **analyze_common,
+            )
+            feats_by_event[ev] = extract_features_from_internals(intern)
+            ok_events.append(ev)
+        except Exception as e:
+            gps = params.get(ev, {}).get("gps_time", "NA")
+            print(f"[WARN] skip {ev}: cannot extract features (gps={gps}): {e}")
 
-    # calibrate clusters
-    print("\n🔧 Calibration par cluster...")
-    cluster_calib: Dict[int, Tuple[float, float]] = {}
+    if len(ok_events) < 5:
+        raise SystemExit(f"[FATAL] Trop peu d'événements feature-ok: {len(ok_events)}")
 
-    for cid in sorted(clusters.keys()):
-        if cid == -1 and args.exclude_cluster_minus1:
-            print("\n⏭️  Cluster -1 (outliers): skipped (using default calibration)")
-            cluster_calib[cid] = (1.0, 1.0)
-            continue
-
-        hstar, scale_ej = calibrate_cluster(
-            cluster_id=cid,
-            events=clusters[cid],
-            params=params,
-            y_obs_dict=y_obs_dict,
-            bands=bands,
-            flow=flow,
-            fhigh=fhigh,
-            signal_win=signal_win,
-            noise_pad=noise_pad,
-            distance_mpc=distance_mpc,
-            use_virgo=use_virgo,
-            peak_norm=peak_norm,
-            peak_quantile=peak_quantile,
-        )
-        cluster_calib[cid] = (hstar, scale_ej)
-
-    # save calib json
-    calib_data = {str(cid): {"H_STAR": float(h), "SCALE_EJ": float(s)} for cid, (h, s) in cluster_calib.items()}
-    with open(args.calib_json, "w") as f:
-        json.dump(calib_data, f, indent=2)
-    print(f"\n💾 Calibrations sauvegardées: {args.calib_json}")
-
-    # re-analyze
-    print("\n🔬 Ré-analyse avec calibration par cluster...")
-    results: Dict[str, Dict] = {}
-    for ev, cid in event_to_cluster.items():
-        hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0))
-        print(f"   {ev} (cluster {cid})...", end=" ")
-
-        res = analyze_with_cluster_calibration(
-            event=ev,
-            cluster_id=cid,
-            hstar=hstar,
-            scale_ej=scale_ej,
-            params=params,
-            bands=bands,
-            flow=flow,
-            fhigh=fhigh,
-            signal_win=signal_win,
-            noise_pad=noise_pad,
-            distance_mpc=distance_mpc,
-            use_virgo=use_virgo,
-            peak_norm=peak_norm,
-            peak_quantile=peak_quantile,
-        )
-        if res is not None:
-            results[ev] = res
-            print("✅")
-        else:
-            print("❌")
-
-    # errors
-    print("\n📊 Calcul des erreurs...")
-    errors = compute_errors(results, refs, ref_key=args.ref_key)
-    print(f"   Erreurs calculées pour {len(errors)} événements")
-
-    # report
-    print("\n📝 Génération du rapport...")
-    write_report(
-        out_path=args.out,
-        event_to_cluster=event_to_cluster,
-        cluster_calib=cluster_calib,
-        results=results,
-        errors=errors,
-        refs=refs,
-        ref_key=args.ref_key,
+    cres = cluster_events(
+        events=ok_events,
+        feats_by_event=feats_by_event,
+        db_eps=float(args.db_eps),
+        db_min_samples=int(args.db_min_samples),
+        k=int(args.k),
+        seed=int(args.seed),
     )
 
-    # summary
-    print("\n" + "=" * 70)
-    print("✅ CALIBRATION PAR CLUSTER TERMINÉE")
-    print("=" * 70)
-    abs_errs = [abs(v) for v in errors.values()]
-    if abs_errs:
-        print(f"MAE globale : {np.mean(abs_errs):.2f}%")
-        print(f"Médiane     : {np.median(abs_errs):.2f}%")
-    print(f"Rapport     : {args.out}")
-    print(f"Calibs JSON : {args.calib_json}")
-    print("=" * 70)
+    # Count clusters
+    cluster_ids = sorted(set(cres.labels.values()))
+    counts = {cid: 0 for cid in cluster_ids}
+    for ev, cid in cres.labels.items():
+        counts[cid] += 1
+
+    print(f"[clustering] n_events={len(ok_events)} inliers={len(cres.inliers)} outliers={len(cres.outliers)} k={args.k}")
+    for cid in sorted(counts.keys()):
+        print(f"   Cluster {cid:>2}: {counts[cid]} événements")
+
+    # Calibrate per cluster
+    print("\n🔧 Calibration par cluster...")
+    cluster_calibs: Dict[str, Any] = {}
+
+    for cid in sorted(counts.keys()):
+        evs = [ev for ev, lab in cres.labels.items() if lab == cid]
+        if cid == -1 and args.exclude_cluster_minus1:
+            cluster_calibs[str(cid)] = {
+                "H_STAR": 1.0,
+                "SCALE_EJ": 1.0,
+                "events_used": 0,
+                "note": "excluded cluster -1 => default calibration",
+            }
+            continue
+
+        try:
+            Hs, Sc, stats = calibrate_lsq_K(
+                events=evs,
+                y_obs_dict=y_obs_dict,
+                params=params,
+                bands=bands,
+                analyze_common=analyze_common,
+                peak_norm=bool(args.peak_norm),
+                peak_quantile=float(args.peak_quantile),
+                use_virgo=use_virgo,
+            )
+            cluster_calibs[str(cid)] = {
+                "H_STAR": Hs,
+                "SCALE_EJ": Sc,
+                **stats,
+            }
+            print(f"✅ Cluster {cid}: H_STAR={Hs:.6e}, SCALE_EJ={Sc:.6e} | rel_MAE={stats['rel_MAE']:.2f}% rel_MED={stats['rel_MED']:.2f}%")
+        except Exception as e:
+            print(f"[ERROR] Cluster {cid} calibration failed: {e}")
+            cluster_calibs[str(cid)] = {
+                "H_STAR": 1.0,
+                "SCALE_EJ": 1.0,
+                "events_used": 0,
+                "note": f"failed => default calibration: {e}",
+            }
+
+    jdump(args.out, cluster_calibs)
+    print(f"\n💾 Calibrations sauvegardées: {args.out}")
+
+    # Re-run events with cluster calibration and print summary
+    print("\n=== SYNTHÈSE PROGRESSIVE (E affinée par cluster) ===")
+    header = "Event | cluster | ν_eff | ν_ref | τ[s] | τ_ref | M⊙c² | M⊙c²_r | Energie[J] | E_aff[J] | E_ref[J] | err_raw[%] | err_aff[%] | Notes"
+    print(header)
+    print("-" * len(header))
+
+    rows = []
+    for ev in ok_events:
+        cid = cres.labels.get(ev, -1)
+        calib = cluster_calibs.get(str(cid), {"H_STAR": 1.0, "SCALE_EJ": 1.0})
+        Hs = float(calib.get("H_STAR", 1.0))
+        Sc = float(calib.get("SCALE_EJ", 1.0))
+
+        try:
+            intern_raw = ligo_spectral_planck.analyze_event(
+                event=ev,
+                params=params,
+                bands=bands,
+                use_virgo=use_virgo,
+                peak_norm=bool(args.peak_norm),
+                peak_quantile=float(args.peak_quantile),
+                hstar_in=1.0,
+                scale_ej_in=1.0,
+                plot=False,
+                return_internals=True,
+                **analyze_common,
+            )
+            intern_aff = ligo_spectral_planck.analyze_event(
+                event=ev,
+                params=params,
+                bands=bands,
+                use_virgo=use_virgo,
+                peak_norm=bool(args.peak_norm),
+                peak_quantile=float(args.peak_quantile),
+                hstar_in=Hs,
+                scale_ej_in=Sc,
+                plot=False,
+                return_internals=True,
+                **analyze_common,
+            )
+        except Exception as e:
+            gps = params.get(ev, {}).get("gps_time", "NA")
+            print(f"[WARN] skip {ev}: analyze_event failed (gps={gps}): {e}")
+            continue
+
+        # fields
+        nu_eff = float(intern_raw.get("nu_eff", float("nan")))
+        tau_s = float(intern_raw.get("tau_s", float("nan")))
+        e_raw = float(intern_raw.get("energy_J", float("nan")))
+        e_aff = float(intern_aff.get("energy_J", float("nan")))
+
+        # refs
+        # Here we keep nu_ref/tau_ref/notes from refs if present
+        rref = next((r for r in refs if (r.get("event") == ev or r.get("name") == ev)), {})
+        nu_ref = float(rref.get("nu_ref", float("nan"))) if rref.get("nu_ref") is not None else float("nan")
+        tau_ref = float(rref.get("tau_ref", float("nan"))) if rref.get("tau_ref") is not None else float("nan")
+        e_ref = float(rref.get("energy_J", float("nan"))) if args.ref_key == "energy_J" else float("nan")
+        note = str(rref.get("notes", rref.get("note", rref.get("cls", ""))))
+
+        err_raw = rel_err_pct(e_raw, e_ref)
+        err_aff = rel_err_pct(e_aff, e_ref)
+
+        rows.append((cid, ev, nu_eff, nu_ref, tau_s, tau_ref, e_raw, e_aff, e_ref, err_raw, err_aff, note))
+
+    # sort by cluster then event
+    rows.sort(key=lambda x: (x[0], x[1]))
+
+    for (cid, ev, nu_eff, nu_ref, tau_s, tau_ref, e_raw, e_aff, e_ref, err_raw, err_aff, note) in rows:
+        print(
+            f"{ev} | {cid:>7} | "
+            f"{nu_eff:6.1f} | {nu_ref:6.1f} | "
+            f"{tau_s:+.5f} | {tau_ref:+.5f} | "
+            f"{fmt_sci(e_raw)} | {fmt_sci(e_aff)} | {fmt_sci(e_ref)} | "
+            f"{signed_pct(err_raw):>9} | {signed_pct(err_aff):>9} | {note}"
+        )
 
 
 if __name__ == "__main__":
