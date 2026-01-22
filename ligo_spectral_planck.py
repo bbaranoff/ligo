@@ -362,9 +362,9 @@ def analyze_event(
     bands: Bands,
     use_virgo: bool,
     peak_norm: bool = False,
-    peak_quantile: float,
-    hstar_in: float,
-    scale_ej_in: float,
+    peak_quantile: float = 0,
+    hstar_in: float = DEFAULT_HSTAR,
+    scale_ej_in: float = DEFAULT_SCALE_EJ,
     plot: bool = False,
     return_internals: bool = False,
 ) -> Dict[str, Any]:
