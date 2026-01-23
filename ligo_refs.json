@@ -153,11 +153,11 @@
     "cls": "BBH"
   },
   "GW190412": {
-    "nu_eff": 150.0,
-    "tau": -0.006,
-    "msun_c2": 1.7,
-    "energy_J": 3e+47,
-    "notes": "Rapport de masse asymétrique significatif (BBH)",
+    "nu_eff": 13.3,
+    "tau": 0.21,
+    "msun_c2": 3.0,
+    "energy_J": 5.3e+47,
+    "notes": "Valeurs expérimentales mises à jour (GWTC-2.1, PE Data Release)",
     "sources": {
       "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
       "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190412/v4/",
@@ -166,8 +166,14 @@
       "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
       "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
     },
-    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)",
-    "cls": "BBH"
+    "ref_note": "Valeurs issues des posteriors PE de GWOSC (event JSON)",
+    "cls": "BBH",
+    "mass1_source": 27.7,
+    "mass2_source": 9.0,
+    "chirp_mass_source": 13.3,
+    "total_mass_source": 36.8,
+    "redshift": 0.15,
+    "luminosity_distance": 720.0
   },
   "GW190413_052954": {
     "nu_eff": 170.0,
@@ -204,11 +210,11 @@
     "cls": "BBH"
   },
   "GW190421_213856": {
-    "nu_eff": 160.0,
-    "tau": -0.008,
-    "msun_c2": 1.6,
-    "energy_J": 2.8e+47,
-    "notes": "O3a (BBH)",
+    "nu_eff": 31.4,
+    "tau": -0.1,
+    "msun_c2": 3.0,
+    "energy_J": 5.3e+47,
+    "notes": "Valeurs expérimentales mises à jour (GWTC-2.1, PE Data Release)",
     "sources": {
       "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
       "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190421_213856/v2/",
@@ -217,8 +223,14 @@
       "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
       "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
     },
-    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)",
-    "cls": "BBH"
+    "ref_note": "Valeurs issues des posteriors PE de GWOSC (event JSON)",
+    "cls": "BBH",
+    "mass1_source": 42.0,
+    "mass2_source": 32.0,
+    "chirp_mass_source": 31.4,
+    "total_mass_source": 73.6,
+    "redshift": 0.45,
+    "luminosity_distance": 2590.0
   },
   "GW190503_185404": {
     "nu_eff": 200.0,
@@ -289,11 +301,11 @@
     "cls": "BBH"
   },
   "GW190521": {
-    "nu_eff": 70.0,
-    "tau": -0.005,
-    "msun_c2": 7.0,
-    "energy_J": 1.2e+48,
-    "notes": "Trous noirs de masse intermédiaire, masse finale ~142 Msun (BBH)",
+    "nu_eff": 63.3,
+    "tau": -0.14,
+    "msun_c2": 3.0,
+    "energy_J": 5.3e+47,
+    "notes": "Valeurs expérimentales mises à jour (GWTC-2.1, PE Data Release)",
     "sources": {
       "gwosc_table_release": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
       "gwosc_event_html": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/GW190521/v4/",
@@ -302,8 +314,14 @@
       "catalog_paper_gwtc2": "https://doi.org/10.1103/PhysRevX.11.021053",
       "gwosc_table_or_query": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all"
     },
-    "ref_note": "Valeurs de reference (nu_eff/tau/energie) = comparatif/approx; pour du quantitatif, utiliser les posteriors PE disponibles via GWOSC (event JSON)",
-    "cls": "BBH"
+    "ref_note": "Valeurs issues des posteriors PE de GWOSC (event JSON)",
+    "cls": "BBH",
+    "mass1_source": 98.4,
+    "mass2_source": 57.2,
+    "chirp_mass_source": 63.3,
+    "total_mass_source": 153.1,
+    "redshift": 0.56,
+    "luminosity_distance": 3310.0
   },
   "GW190828_063405": {
     "nu_eff": 180.0,
