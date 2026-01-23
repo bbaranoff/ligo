@@ -1,0 +1,77 @@
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW150914...
+=== ANALYSE SPECTRALE GW150914 ===
+E_total = 5.572e+47 J (3.117785 M_sun)
+nu_eff  = 159.52 Hz
+Tau (H1-L1): -1.708984e-03 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW151226...
+=== ANALYSE SPECTRALE GW151226 ===
+E_total = 2.779e+47 J (1.555247 M_sun)
+nu_eff  = 174.09 Hz
+Tau (H1-L1): -9.765625e-04 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170104...
+=== ANALYSE SPECTRALE GW170104 ===
+E_total = 3.484e+47 J (1.949385 M_sun)
+nu_eff  = 184.85 Hz
+Tau (H1-L1): -0.000000e+00 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170608...
+=== ANALYSE SPECTRALE GW170608 ===
+E_total = 5.919e+47 J (3.312009 M_sun)
+nu_eff  = 164.44 Hz
+Tau (H1-L1): -3.906250e-03 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170729...
+=== ANALYSE SPECTRALE GW170729 ===
+E_total = 1.650e+47 J (0.923480 M_sun)
+nu_eff  = 182.34 Hz
+Tau (H1-L1): -9.765625e-04 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170809...
+=== ANALYSE SPECTRALE GW170809 ===
+E_total = 3.621e+47 J (2.026291 M_sun)
+nu_eff  = 200.90 Hz
+Tau (H1-L1): -2.929688e-03 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170814...
+=== ANALYSE SPECTRALE GW170814 ===
+E_total = 3.917e+47 J (2.191760 M_sun)
+nu_eff  = 171.15 Hz
+Tau (H1-L1): -2.685547e-03 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW170817...
+=== ANALYSE SPECTRALE GW170817 ===
+E_total = 3.370e+47 J (1.885550 M_sun)
+nu_eff  = 185.66 Hz
+Tau (H1-L1): -4.882812e-04 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW190403_051519...
+=== ANALYSE SPECTRALE GW190403_051519 ===
+E_total = 3.573e+47 J (1.999118 M_sun)
+nu_eff  = 189.58 Hz
+Tau (H1-L1): -7.324219e-04 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW190412...
+=== ANALYSE SPECTRALE GW190412 ===
+E_total = 4.018e+47 J (2.248051 M_sun)
+nu_eff  = 169.82 Hz
+Tau (H1-L1): -2.441406e-04 s
+[cal] refs_loaded=0 y_obs=0 events=0 ref_key=energy_J
+
+📡 Chargement des données NPZ pour GW190413_052954...
+=== ANALYSE SPECTRALE GW190413_052954 ===
+E_total = 3.102e+47 J (1.735951 M_sun)
+nu_eff  = 181.53 Hz
+Tau (H1-L1): -1.220703e-03 s
