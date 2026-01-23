@@ -1,137 +1,168 @@
-# ligo
-
-### *Testing LIGO research in Python*
-
-Ce dépôt contient un **pipeline de traitement et d’analyse des signaux gravitationnels** détectés par les observatoires LIGO/Virgo. Il propose une approche expérimentale basée sur l’analyse spectrale brute, un clustering aveugle des événements, et une calibration par classe pour estimer l’énergie rayonnée, **sans utiliser directement les résultats d’inférence officiels**.
+Parfait — voici le **README final**, cohérent de bout en bout, avec **exactement** les commandes que tu utilises réellement.
+Prêt à être copié/collé tel quel.
 
 ---
 
-## 🚀 Objectif
+# LIGO Spectral Calibration — Pipeline expérimental
 
-L’objectif est d’explorer **la relation entre la morphologie spectrale des signaux LIGO et l’énergie radiative estimée**, en utilisant **des outils de traitement du signal**, une méthode de **clustering non supervisée**, et une **calibration par cluster** pour rapprocher les estimations des valeurs publiées.
+Ce dépôt implémente un pipeline expérimental pour analyser des événements LIGO/Virgo à partir des **strain time series**, produire des observables spectro-temporelles homogènes, puis étudier leur **calibrabilité mutuelle** via une calibration itérative non supervisée.
 
-Ce projet est purement exploratoire et vise à fournir une preuve de concept pour des approches alternatives d’analyse des signaux d’ondes gravitationnelles.
+L’approche est volontairement **agnostique aux paramètres astrophysiques publiés** (masses, spins, inclinaison) pour :
 
----
+* la sélection des événements,
+* le clustering,
+* la calibration.
 
-## 🧠 Pipeline d’analyse
-
-Le pipeline se déroule en cinq grandes étapes :
-
-1. **Traitement du signal brut**
-   Extraction d’observables spectrales (PSD, énergie spectrale, fréquence moyenne, asymétrie) à partir des *strains bruts H1/L1/V1* des événements LIGO.
-
-2. **Clustering spectral aveugle**
-   Regroupement des événements par similarité spectrale, sans utiliser les énergies ou paramètres astrophysiques fournis par LIGO.
-
-3. **Calibration par cluster**
-   Pour chaque cluster, ajustement de deux paramètres effectifs :
-
-   * `H_STAR` : correction de délai H1–L1 / effet géométrique
-   * `SCALE_EJ` : facteur d’échelle énergétique
-     Ces paramètres sont optimisés pour réduire l’écart entre les énergies calculées et les valeurs de référence officielles LIGO.
-
-4. **Évaluation a posteriori**
-   Calcul des erreurs relatives par événement et par cluster par rapport aux valeurs officielles publiées.
-
-5. **Analyse des performances**
-   Classement des meilleurs et pires ajustements pour interpréter la qualité de la calibration selon la morphologie des signaux.
+Ces paramètres ne sont utilisés **qu’a posteriori**, uniquement pour l’évaluation quantitative des erreurs.
 
 ---
 
-## 📊 Résultats attendus
+## Principe général
 
-Le pipeline génère notamment :
+1. Télécharger les données strain LIGO (H1/L1, Virgo optionnel).
+2. Extraire des observables spectro-temporelles à partir d’une **fenêtre temporelle contrôlée**.
+3. Générer des résultats homogènes par événement (`results/GW*.json`).
+4. Effectuer une calibration itérative par clustering :
 
-* Un **classement des ajustements** par erreur relative.
-* Des **statistiques par cluster** qui montrent quelles classes d’événements sont bien modélisées (erreur moyenne faible) et lesquelles ne le sont pas.
-* Une **synthèse CSV/JSON** des paramètres calibrés et des erreurs.
-
-Typiquement :
-
-* Certains clusters atteignent des erreurs moyennes **~3–5 %**, ce qui indique une bonne cohérence entre l’approche spectrale et les valeurs officielles.
-* D’autres clusters montrent des erreurs plus élevées (**~10–40 %+**), révélant les limites d’un modèle à deux paramètres pour ces morphologies.
+   * détection d’outliers,
+   * calibration globale puis locale,
+   * calcul de statistiques *clean* (hors outliers et clusters triviaux).
 
 ---
 
-## 🔧 Comment utiliser
+## Installation
 
-### Pré-requis
-
-Installer les dépendances :
+### Script d’installation (`go.sh`)
 
 ```bash
-pip install -r requirements.txt
+#!/bin/bash
+
+# 1. créer l’environnement seulement si absent
+if [ ! -d ".env" ]; then
+    python3 -m venv .env
+fi
+
+# 2. ACTIVER l'env
+source .env/bin/activate
+
+# 3. installer les dépendances
+pip install --upgrade pip
+pip3 install scipy gwosc numpy matplotlib gwpy numba
+# ou : pip install -r requirements.txt
 ```
 
-### Téléchargement des données
+---
 
-Avant d’analyser, télécharge les fichiers NPZ LIGO/Virgo :
+## Utilisation du pipeline
+
+### 1️⃣ Activer l’environnement
+
+```bash
+source go.sh
+```
+
+---
+
+### 2️⃣ Télécharger les données LIGO (NPZ)
+
+Télécharge les fichiers strain nécessaires pour les événements définis :
 
 ```bash
 python ligo_npz_downloader.py
 ```
 
-### Exécuter tout le pipeline
+Les fichiers sont stockés localement et réutilisés par la suite.
+
+---
+
+### 3️⃣ Générer les résultats spectro-temporels
+
+Analyse chaque événement et produit un fichier JSON par événement :
 
 ```bash
-bash run_all.sh
+bash run_results.sh
 ```
 
-### Calibration itérative par cluster
+Résultat :
+
+```
+results/
+ ├── GW150914.json
+ ├── GW151226.json
+ ├── GW170104.json
+ └── ...
+```
+
+Chaque fichier contient uniquement des observables dérivées du **strain**.
+
+---
+
+### 4️⃣ Calibration itérative par clustering
+
+Lance la calibration itérative globale + locale :
 
 ```bash
 python run_iterative_calibration.py \
   --refs ligo_refs.json \
   --event-params event_params.json \
-  --max-iter 10 \
-  --tol 1e-4 \
-  --k 4
+  --signal-win 0.6 \
+  --noise-pad 800 \
+  --peak-quantile 0.9 \
+  --k 4 \
+  --db-eps 0.7 \
+  --db-min-samples 2 \
+  --exclude-cls BNS \
+  --exclude-cluster-minus1 \
+  --flow 30 \
+  --fhigh 500
 ```
 
-Options utiles :
+### Effets de cette étape
 
-* `--exclude-cluster-minus1` : exclut les outliers (cluster -1)
-* `--exclude-cls BNS` : exclut les événements BNS (neutron stars)
+* clustering non supervisé des événements,
+* détection automatique des outliers (cluster `-1`),
+* calibration globale puis par cluster,
+* calcul des **stats clean** (hors outliers et clusters à 1 événement).
 
----
+Sorties typiques :
 
-## 📁 Structure du dépôt
-
-* `ligo_spectral_planck.py` — Extraction d’observables spectrales
-* `cluster_latent_kmeans.py` — Clustering des événements
-* `run_iterative_calibration.py` — Calibration et optimisation par cluster
-* `plot_all_spectra.py` — Visualisation des spectres
-* `results/` — Dossiers de résultats générés
-* `event_params.json`, `ligo_refs.json` — Données d’entrée
+* `calibration_iterative.txt` : rapport détaillé lisible,
+* `cluster_calibrations_iterative.json` : paramètres de calibration.
 
 ---
 
-## 🧪 Exemple de sortie
+## Interprétation des résultats
 
-Le pipeline génère des classements comme :
+* **MAE globale** : dominée par les événements non comparables.
+* **Stats clean** :
 
-```
-🏆 TOP 10 MEILLEURS FITS
- 1. GW190412 (Cluster 0)      Erreur: +2.37%
- 2. GW170104 (Cluster 2)      Erreur: -3.01%
- ...
-💀 TOP 10 PIRES FITS
- 1. GW170817 (Cluster -1)     Erreur: +665.85%
- 2. GW170608 (Cluster -1)     Erreur: +269.94%
- ...
-```
+  * calculées uniquement sur des événements cohérents entre eux,
+  * sélection indépendante des paramètres astrophysiques publiés,
+  * reflètent un régime physique commun capturé par le modèle.
 
-Ce classement met en lumière les événements bien modélisés et ceux qui ne le sont pas, permettant une **interprétation physique et méthodologique**.
+Les événements exclus (outliers) correspondent généralement à :
+
+* systèmes NSBH,
+* rapports de masse extrêmes,
+* géométries fortement dégénérées.
 
 ---
 
-## 💡 Interprétation
+## Cadre et limites
 
-Ce projet n’a pas vocation à remplacer les pipelines d’inférence officiels des collaborations LIGO/Virgo, mais à explorer **des approches complémentaires** basées sur des caractéristiques spectrales et des calibrations simples. Il met en évidence des classes d’événements compatibles avec une faible erreur (indiquant un invariant énergétique localisable par cluster) et d’autres hors du domaine de validité de ce modèle.
+* Ce pipeline **ne cherche pas** une loi universelle.
+* Il met en évidence l’existence de **sous-populations calibrables** à partir du strain seul.
+* Toute extension nécessite l’introduction explicite de paramètres supplémentaires (spin effectif, q, inclinaison…).
 
 ---
 
-## 📜 Licence
+## Résumé en une phrase
 
-Ce dépôt est en open-source. Pour les détails de licence, voir le fichier `LICENSE.md`.
+> Ce pipeline montre qu’un sous-ensemble d’événements LIGO est mutuellement calibrable à partir de la seule structure spectro-temporelle du strain, via un choix contrôlé de fenêtre temporelle et une mise à l’échelle énergétique globale.
+
+---
+
+Si tu veux, prochaine étape possible :
+
+* ajouter une section *Méthodologie mathématique*,
+* ou un *schéma de dépendance des données* (strain → features → clusters → stats).
