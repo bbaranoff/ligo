@@ -12,10 +12,3 @@ source .env/bin/activate
 pip install --upgrade pip
 pip3 install scipy gwosc numpy matplotlib gwpy numba
 # ou pip install -r requirements.txt
-
-# 4. lancer pipeline
-bash run_all.sh
-python3 plot_all_spectra.py
-python3 cluster_kmeans_pca.py
-cat clusters_kmeans.txt
-xdg-open plots/spectres_normalises.png
