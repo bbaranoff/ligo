@@ -2,14 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-Pipeline complet de calibration itérative pour l'analyse spectrale LIGO
+Pipeline complet de calibration par grille exhaustive pour l'analyse spectrale LIGO
 
 Ce script orchestre :
-1. Téléchargement des données NPZ (si nécessaire)
-2. Clustering des événements
-3. Calibration itérative alternée H_STAR ↔ SCALE_EJ par cluster
-4. Analyse finale avec calibration optimale
-5. Génération de rapports détaillés
+1. Clustering des événements (via cluster_latent_kmeans.py)
+2. Calibration par grille exhaustive (H_STAR × SCALE_EJ) par cluster
+3. Analyse finale avec calibration optimale
+4. Génération de rapports détaillés
+
+Principe de calibration :
+- Dans ligo_spectral_planck.py : energy_J = E_internal(H_STAR) × SCALE_EJ
+- Pour chaque H_STAR ∈ [0.5, 2.5] par pas de 0.1 :
+  * Calculer E_internal(H_STAR) pour tous les événements
+  * Trouver le meilleur SCALE_EJ par moindres carrés
+  * Calculer RSS = sum((E_ref - SCALE_EJ × E_internal)^2)
+- Garder la combinaison (H_STAR, SCALE_EJ) qui minimise RSS
 
 Usage:
     python run_iterative_calibration.py --refs ligo_refs.json --event-params event_params.json
@@ -20,9 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -32,285 +38,163 @@ import cluster_latent_kmeans as clk
 import ligo_spectral_planck as lsp
 
 
-def calibrate_hstar_fixed_scale(
+def calibrate_hstar_and_scale_grid(
     events: List[str],
     params: Dict,
-    y_obs_dict: Dict[str, float],
+    E_ref_dict: Dict[str, float],
     bands: lsp.Bands,
-    scale_ej_fixed: float,
+    h_min: float = 0.5,
+    h_max: float = 2.5,
+    h_step: float = 0.1,
     **analyze_kwargs,
-) -> float:
+) -> Tuple[float, float]:
     """
-    Calibre H_STAR en gardant SCALE_EJ fixé.
+    Calibre H_STAR et SCALE_EJ par recherche exhaustive sur grille.
     
-    Minimise: sum((y_obs - scale_ej * h * y_model(h))^2)
-    où y_model(h) dépend de h via tau_hl_cal = h * tau_hl
+    Pour chaque H_STAR dans [h_min, h_max] avec pas h_step :
+      1. Calculer E_internal(H_STAR) pour tous les événements
+      2. Trouver le meilleur SCALE_EJ par moindres carrés
+      3. Calculer l'erreur RSS
     
-    Returns:
-        float: H_STAR optimal
+    Retourner la combinaison (H_STAR, SCALE_EJ) qui minimise RSS.
     """
-    print(f"\n  🔧 Calibration H_STAR (SCALE_EJ={scale_ej_fixed:.6e} fixé)...")
+    print(f"  🔧 Calibration grille H_STAR ∈ [{h_min}, {h_max}] pas={h_step}...")
     
-    # Collecte des données
-    data = []
+    # Filtrer événements valides
+    valid_events = []
+    E_ref_list = []
+    
     for ev in events:
-        if ev not in y_obs_dict:
+        if ev not in E_ref_dict:
             continue
-        
-        y_obs = float(y_obs_dict[ev])
-        if not np.isfinite(y_obs) or y_obs <= 0:
+        E_ref = float(E_ref_dict[ev])
+        if not np.isfinite(E_ref) or E_ref <= 0:
             continue
-        
-        try:
-            # Analyse avec H_STAR=1.0 pour référence
-            result = lsp.analyze_event(
-                event=ev,
-                params=params,
-                bands=bands,
-                hstar_in=1.0,
-                scale_ej_in=scale_ej_fixed,
-                plot=False,
-                return_internals=True,
-                **analyze_kwargs,
-            )
-            
-            y_model = float(result.get("energy_J", 0.0))
-            if not np.isfinite(y_model) or y_model <= 0:
-                continue
-                
-            data.append((ev, y_obs, y_model))
-            
-        except Exception as e:
-            print(f"    [WARN] Skip {ev}: {e}")
-            continue
+        valid_events.append(ev)
+        E_ref_list.append(E_ref)
     
-    if len(data) < 2:
-        print(f"    [WARN] Pas assez d'événements valides ({len(data)}), H_STAR=1.0")
-        return 1.0
+    if len(valid_events) < 2:
+        print(f"    [WARN] Pas assez d'événements valides ({len(valid_events)})")
+        return 1.0, 1.0
     
-    evs = [d[0] for d in data]
-    y_obs = np.array([d[1] for d in data])
-    y_mod = np.array([d[2] for d in data])
+    E_ref = np.array(E_ref_list)
     
-    # Optimisation de H_STAR
-    # Note: comme tau dépend linéairement de H, y_model(h) n'est pas exactement linéaire en h
-    # On fait une optimisation 1D simple
-    def loss(h: float) -> float:
-        if h <= 0:
-            return 1e10
-        
-        # Ré-analyse avec ce H_STAR
-        y_pred = []
-        for ev in evs:
+    # Grille de valeurs H_STAR à tester
+    h_values = np.arange(h_min, h_max + h_step/2, h_step)
+    n_tests = len(h_values)
+    
+    print(f"    Testing {n_tests} valeurs de H_STAR...")
+    
+    best_h = 1.0
+    best_scale = 1.0
+    best_rss = float('inf')
+    best_mae = float('inf')
+    
+    for i, h_star in enumerate(h_values):
+        # 1) Calculer E_internal(h_star) pour tous les événements
+        E_internal_list = []
+        for ev in valid_events:
             try:
                 result = lsp.analyze_event(
                     event=ev,
                     params=params,
                     bands=bands,
-                    hstar_in=h,
-                    scale_ej_in=scale_ej_fixed,
+                    hstar_in=h_star,
+                    scale_ej_in=1.0,
                     plot=False,
                     return_internals=True,
                     **analyze_kwargs,
                 )
-                y_pred.append(float(result.get("energy_J", 0.0)))
+                E_int = float(result.get("E_internal", 0.0))
+                E_internal_list.append(E_int if np.isfinite(E_int) and E_int > 0 else 0.0)
             except Exception:
-                y_pred.append(0.0)
+                E_internal_list.append(0.0)
         
-        y_pred = np.array(y_pred)
-        residuals = y_obs - y_pred
-        return float(np.sum(residuals ** 2))
-    
-    # Approximation initiale: H ~ moyenne des ratios
-    h_init = float(np.median(y_obs / y_mod))
-    
-    # Optimisation
-    result = minimize_scalar(
-        loss,
-        bounds=(0.1 * h_init, 10.0 * h_init),
-        method='bounded',
-        options={'xatol': 1e-6, 'maxiter': 20}
-    )
-    
-    h_opt = float(result.x)
-    
-    print(f"    ✅ H_STAR = {h_opt:.6e} (init={h_init:.6e}, loss={result.fun:.3e})")
-    
-    return h_opt
-
-
-def calibrate_scale_fixed_hstar(
-    events: List[str],
-    params: Dict,
-    y_obs_dict: Dict[str, float],
-    bands: lsp.Bands,
-    hstar_fixed: float,
-    **analyze_kwargs,
-) -> float:
-    """
-    Calibre SCALE_EJ en gardant H_STAR fixé.
-    
-    Pour H_STAR fixé, SCALE_EJ est linéaire: y_pred = scale * y_model
-    Solution fermée: scale = (y_obs · y_model) / (y_model · y_model)
-    
-    Returns:
-        float: SCALE_EJ optimal
-    """
-    print(f"\n  🔧 Calibration SCALE_EJ (H_STAR={hstar_fixed:.6e} fixé)...")
-    
-    data = []
-    for ev in events:
-        if ev not in y_obs_dict:
+        E_internal = np.array(E_internal_list)
+        
+        # 2) Trouver le meilleur SCALE_EJ pour ce H_STAR (solution fermée)
+        num = float(np.dot(E_ref, E_internal))
+        den = float(np.dot(E_internal, E_internal))
+        
+        if den <= 0 or not np.isfinite(num):
             continue
         
-        y_obs = float(y_obs_dict[ev])
-        if not np.isfinite(y_obs) or y_obs <= 0:
-            continue
+        scale_ej = num / den
         
-        try:
-            result = lsp.analyze_event(
-                event=ev,
-                params=params,
-                bands=bands,
-                hstar_in=hstar_fixed,
-                scale_ej_in=1.0,  # Calibrer à partir de 1.0
-                plot=False,
-                return_internals=True,
-                **analyze_kwargs,
-            )
-            
-            y_model = float(result.get("energy_J", 0.0))
-            if not np.isfinite(y_model) or y_model <= 0:
-                continue
-                
-            data.append((ev, y_obs, y_model))
-            
-        except Exception as e:
-            print(f"    [WARN] Skip {ev}: {e}")
-            continue
+        # 3) Calculer l'erreur avec cette combinaison
+        E_pred = scale_ej * E_internal
+        residuals = E_ref - E_pred
+        rss = float(np.sum(residuals ** 2))
+        rel_errors = 100 * np.abs(residuals / E_ref)
+        mae = float(np.mean(rel_errors))
+        
+        # 4) Garder si c'est le meilleur
+        if rss < best_rss:
+            best_rss = rss
+            best_h = h_star
+            best_scale = scale_ej
+            best_mae = mae
+        
+        # Affichage de chaque test
+        print(f"      [{i+1:2}/{n_tests}] H={h_star:.2f}, S={scale_ej:.3e}, MAE={mae:.2f}%, RSS={rss:.3e}")
     
-    if len(data) < 2:
-        print(f"    [WARN] Pas assez d'événements valides ({len(data)}), SCALE_EJ=1.0")
-        return 1.0
+    print(f"    ✅ Optimal: H_STAR={best_h:.2f}, SCALE_EJ={best_scale:.6e}, MAE={best_mae:.2f}%, RSS={best_rss:.3e}")
     
-    y_obs = np.array([d[1] for d in data])
-    y_mod = np.array([d[2] for d in data])
-    
-    # Solution fermée des moindres carrés
-    num = float(np.dot(y_obs, y_mod))
-    den = float(np.dot(y_mod, y_mod))
-    
-    if den <= 0 or not np.isfinite(num):
-        print(f"    [WARN] Dénominateur invalide, SCALE_EJ=1.0")
-        return 1.0
-    
-    scale_opt = num / den
-    
-    # Diagnostics
-    y_pred = scale_opt * y_mod
-    rel_errors = 100 * np.abs((y_pred - y_obs) / y_obs)
-    mae = float(np.mean(rel_errors))
-    
-    print(f"    ✅ SCALE_EJ = {scale_opt:.6e} (MAE={mae:.2f}%)")
-    
-    return scale_opt
+    return best_h, best_scale
 
 
 def iterative_calibration(
     cluster_id: int,
     events: List[str],
     params: Dict,
-    y_obs_dict: Dict[str, float],
+    E_ref_dict: Dict[str, float],
     bands: lsp.Bands,
     max_iter: int = 10,
     tol: float = 1e-4,
+    h_min: float = 0.5,
+    h_max: float = 2.5,
+    h_step: float = 0.1,
     **analyze_kwargs,
 ) -> Tuple[float, float, List[Dict]]:
     """
-    Calibration itérative alternée H_STAR ↔ SCALE_EJ jusqu'à convergence.
+    Calibration par recherche exhaustive sur grille H_STAR.
     
-    Args:
-        cluster_id: ID du cluster
-        events: Liste d'événements du cluster
-        params: Paramètres des événements
-        y_obs_dict: Énergies observées de référence
-        bands: Bandes de fréquence
-        max_iter: Nombre max d'itérations
-        tol: Tolérance de convergence (changement relatif)
-        **analyze_kwargs: Arguments pour analyze_event
-    
-    Returns:
-        (hstar, scale_ej, history): Valeurs optimales et historique
+    Pour chaque H_STAR testé, trouve le meilleur SCALE_EJ,
+    puis garde la combinaison qui minimise l'erreur globale.
     """
     print(f"\n{'='*70}")
-    print(f"📊 CALIBRATION ITÉRATIVE CLUSTER {cluster_id} ({len(events)} events)")
+    print(f"📊 CALIBRATION GRILLE CLUSTER {cluster_id} ({len(events)} events)")
     print(f"{'='*70}")
     
-    # Filtrer événements valides
-    valid_events = [e for e in events if e in y_obs_dict]
+    valid_events = [e for e in events if e in E_ref_dict]
     if len(valid_events) < 2:
         print(f"⚠️  Cluster {cluster_id}: pas assez d'events avec refs ({len(valid_events)})")
         print(f"    -> calibration par défaut (H_STAR=1.0, SCALE_EJ=1.0)")
         return 1.0, 1.0, []
     
     print(f"Événements valides: {len(valid_events)}")
-    print(f"Tolérance: {tol:.2e}, Max itérations: {max_iter}")
+    print(f"Recherche exhaustive: H_STAR ∈ [{h_min}, {h_max}], pas={h_step}")
     
-    # Initialisation
-    h_star = 1.0
-    scale_ej = 1.0
-    history = []
+    # Calibration directe par grille
+    h_star, scale_ej = calibrate_hstar_and_scale_grid(
+        events=valid_events,
+        params=params,
+        E_ref_dict=E_ref_dict,
+        bands=bands,
+        h_min=h_min,
+        h_max=h_max,
+        h_step=h_step,
+        **analyze_kwargs,
+    )
     
-    for iteration in range(max_iter):
-        print(f"\n--- Itération {iteration + 1}/{max_iter} ---")
-        
-        # 1) Calibrer H_STAR (SCALE_EJ fixé)
-        h_new = calibrate_hstar_fixed_scale(
-            events=valid_events,
-            params=params,
-            y_obs_dict=y_obs_dict,
-            bands=bands,
-            scale_ej_fixed=scale_ej,
-            **analyze_kwargs,
-        )
-        
-        # 2) Calibrer SCALE_EJ (H_STAR fixé)
-        scale_new = calibrate_scale_fixed_hstar(
-            events=valid_events,
-            params=params,
-            y_obs_dict=y_obs_dict,
-            bands=bands,
-            hstar_fixed=h_new,
-            **analyze_kwargs,
-        )
-        
-        # 3) Vérifier convergence
-        dh = abs(h_new - h_star) / max(abs(h_star), 1e-30)
-        ds = abs(scale_new - scale_ej) / max(abs(scale_ej), 1e-30)
-        
-        history.append({
-            'iteration': iteration + 1,
-            'h_star': h_new,
-            'scale_ej': scale_new,
-            'K': h_new * scale_new,
-            'delta_h': dh,
-            'delta_s': ds,
-        })
-        
-        print(f"\n  📈 H_STAR:   {h_star:.6e} → {h_new:.6e}  (Δ={dh:.2e})")
-        print(f"  📈 SCALE_EJ: {scale_ej:.6e} → {scale_new:.6e}  (Δ={ds:.2e})")
-        print(f"  📈 K=H×S:    {h_star*scale_ej:.6e} → {h_new*scale_new:.6e}")
-        
-        converged = (dh < tol) and (ds < tol)
-        
-        h_star = h_new
-        scale_ej = scale_new
-        
-        if converged:
-            print(f"\n✅ CONVERGENCE atteinte à l'itération {iteration + 1}")
-            break
-    else:
-        print(f"\n⚠️  Max itérations atteint sans convergence complète")
+    history = [{
+        'iteration': 1,
+        'h_star': h_star,
+        'scale_ej': scale_ej,
+        'K': h_star * scale_ej,
+        'delta_h': 0.0,
+        'delta_s': 0.0,
+    }]
     
     print(f"\n{'='*70}")
     print(f"📊 CALIBRATION FINALE CLUSTER {cluster_id}")
@@ -370,15 +254,45 @@ def write_report(
     lines.append("="*100)
     lines.append("")
     
-    # Stats globales
+    # Stats globales (tous événements)
     all_errors = [abs(e) for e in errors.values()]
     if all_errors:
         mae_global = np.mean(all_errors)
         med_global = np.median(all_errors)
-        lines.append(f"📊 STATISTIQUES GLOBALES")
-        lines.append(f"   MAE (tous événements) : {mae_global:.2f}%")
+        lines.append(f"📊 STATISTIQUES GLOBALES (tous événements)")
+        lines.append(f"   MAE                  : {mae_global:.2f}%")
         lines.append(f"   Médiane              : {med_global:.2f}%")
         lines.append(f"   N événements         : {len(errors)}")
+        lines.append("")
+    
+    # Stats clean (sans cluster -1 ni clusters à 1 événement)
+    clean_errors = []
+    for event, err in errors.items():
+        cid = event_to_cluster.get(event, -999)
+        if cid == -1:
+            continue
+        if len(clusters[cid]) == 1:
+            continue
+        clean_errors.append(abs(err))
+    
+    if clean_errors:
+        mae_clean = np.mean(clean_errors)
+        med_clean = np.median(clean_errors)
+        max_clean = max(clean_errors)
+        min_clean = min(clean_errors)
+        
+        # Compte des événements par catégorie
+        n_clean = len(clean_errors)
+        n_outliers = sum(1 for e, cid in event_to_cluster.items() if cid == -1 and e in errors)
+        n_single = sum(1 for e, cid in event_to_cluster.items() if len(clusters[cid]) == 1 and cid != -1 and e in errors)
+        
+        lines.append(f"✨ STATISTIQUES CLEAN (sans outliers ni clusters à 1 event)")
+        lines.append(f"   MAE                  : {mae_clean:.2f}%")
+        lines.append(f"   Médiane              : {med_clean:.2f}%")
+        lines.append(f"   Min / Max            : {min_clean:.2f}% / {max_clean:.2f}%")
+        lines.append(f"   N événements clean   : {n_clean}")
+        lines.append(f"   N outliers (cl=-1)   : {n_outliers}")
+        lines.append(f"   N single (cl=1 ev)   : {n_single}")
         lines.append("")
     
     # Par cluster
@@ -489,7 +403,6 @@ def write_report(
         cid = event_to_cluster.get(event, -999)
         lines.append(f"{i:2}. {event:20} | Cluster {cid:2} | Erreur: {err:+7.2f}%")
     
-    # Write file
     with open(out_path, "w") as f:
         f.write("\n".join(lines))
     
@@ -502,10 +415,14 @@ def main():
     )
     
     # Files
-    ap.add_argument("--refs", required=True, help="JSON refs LIGO (ligo_refs.json)")
+    ap.add_argument("--refs", required=True, help="JSON refs LIGO")
     ap.add_argument("--event-params", default="event_params.json", help="JSON params events")
     ap.add_argument("--results-glob", default="results/GW*.json", help="Pattern des JSON results")
-    
+    ap.add_argument("--signal-win", type=float, default=0.6,
+                    help="Fenêtre signal (pass-through vers ligo_spectral_planck)")
+    ap.add_argument("--noise-pad", type=float, default=800,
+                    help="Padding bruit (pass-through vers ligo_spectral_planck)")
+
     # Clustering params
     ap.add_argument("--k", type=int, default=4, help="Nombre de clusters KMeans")
     ap.add_argument("--db-eps", type=float, default=1.4, help="DBSCAN eps")
@@ -514,8 +431,9 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     
     # Iterative calibration
-    ap.add_argument("--max-iter", type=int, default=10, help="Max itérations calibration")
-    ap.add_argument("--tol", type=float, default=1e-4, help="Tolérance convergence")
+    ap.add_argument("--h-min", type=float, default=0.5, help="H_STAR minimum grille")
+    ap.add_argument("--h-max", type=float, default=2.5, help="H_STAR maximum grille")
+    ap.add_argument("--h-step", type=float, default=0.1, help="Pas de la grille H_STAR")
     
     # Analysis params
     ap.add_argument("--flow", type=float, default=None)
@@ -540,7 +458,7 @@ def main():
         refs = json.load(f)
     
     exclude = set(args.exclude_cls)
-    y_obs_dict = {}
+    E_ref_dict = {}
     for ev, d in refs.items():
         if not isinstance(d, dict):
             continue
@@ -549,9 +467,9 @@ def main():
         v = d.get(args.ref_key)
         if v is None or not np.isfinite(float(v)) or float(v) <= 0:
             continue
-        y_obs_dict[ev] = float(v)
+        E_ref_dict[ev] = float(v)
     
-    print(f"   Références chargées: {len(refs)} total, {len(y_obs_dict)} valides")
+    print(f"   Références chargées: {len(refs)} total, {len(E_ref_dict)} valides")
     
     # 2) Load event params
     print("\n📋 Chargement des paramètres d'événements...")
@@ -576,8 +494,8 @@ def main():
     for cid in sorted(clusters.keys()):
         print(f"   Cluster {cid:2}: {len(clusters[cid])} événements")
     
-    # 4) Iterative calibration par cluster
-    print("\n🔧 Calibration itérative par cluster...")
+    # 4) Grid calibration par cluster
+    print("\n🔧 Calibration par grille exhaustive par cluster...")
     
     bands = lsp.Bands(
         tau_band=(float(args.tau_band[0]), float(args.tau_band[1])),
@@ -587,8 +505,8 @@ def main():
     analyze_kwargs = {
         'flow': args.flow,
         'fhigh': args.fhigh,
-        'signal_win': None,
-        'noise_pad': None,
+        'signal_win': args.signal_win,
+        'noise_pad': args.noise_pad,
         'distance_mpc': None,
         'use_virgo': not args.no_virgo,
         'peak_quantile': args.peak_quantile,
@@ -609,10 +527,11 @@ def main():
             cluster_id=cid,
             events=events,
             params=params,
-            y_obs_dict=y_obs_dict,
+            E_ref_dict=E_ref_dict,
             bands=bands,
-            max_iter=args.max_iter,
-            tol=args.tol,
+            h_min=args.h_min,
+            h_max=args.h_max,
+            h_step=args.h_step,
             **analyze_kwargs,
         )
         cluster_calib[cid] = (hstar, scale_ej)
@@ -620,6 +539,9 @@ def main():
     
     # Save calibrations with history
     calib_data = {
+        "event_to_cluster": {
+            event: int(cid) for event, cid in event_to_cluster.items()
+        },
         "calibrations": {
             str(cid): {
                 "H_STAR": float(hstar),
@@ -631,8 +553,9 @@ def main():
             for cid, (hstar, scale_ej) in cluster_calib.items()
         },
         "params": {
-            "max_iter": args.max_iter,
-            "tol": args.tol,
+            "h_min": args.h_min,
+            "h_max": args.h_max,
+            "h_step": args.h_step,
             "k_clusters": args.k,
         }
     }
@@ -684,13 +607,30 @@ def main():
     
     # 8) Summary
     print("\n" + "="*70)
-    print("✅ CALIBRATION ITÉRATIVE TERMINÉE")
+    print("✅ CALIBRATION PAR GRILLE EXHAUSTIVE TERMINÉE")
     print("="*70)
     all_errors = [abs(e) for e in errors.values()]
     if all_errors:
         print(f"MAE globale : {np.mean(all_errors):.2f}%")
         print(f"Médiane     : {np.median(all_errors):.2f}%")
-    print(f"Rapport     : {args.out}")
+    
+    # Stats clean
+    clean_errors = []
+    for event, err in errors.items():
+        cid = event_to_cluster.get(event, -999)
+        if cid == -1:
+            continue
+        if len(clusters[cid]) == 1:
+            continue
+        clean_errors.append(abs(err))
+    
+    if clean_errors:
+        print(f"\n✨ STATS CLEAN (sans outliers ni clusters 1-event):")
+        print(f"MAE clean   : {np.mean(clean_errors):.2f}%")
+        print(f"Médiane     : {np.median(clean_errors):.2f}%")
+        print(f"N clean     : {len(clean_errors)}")
+    
+    print(f"\nRapport     : {args.out}")
     print(f"Calibs JSON : {args.calib_json}")
     print("="*70)
 
