@@ -54,13 +54,41 @@ M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
 
 DEFAULT_HSTAR = 1.0
-DEFAULT_SCALE_EJ = 4.3e37
-NORM_EJ=4.3e37
+DEFAULT_SCALE_EJ = 1.0
+NORM_EJ = 3.8e37
+
 # ------------------
-# IO params
+# NPZ local loading
 # ------------------
+def get_npz_path(event: str, detector: str, npz_dir: str = "data/npz") -> str:
+    """Retourne le chemin vers le fichier NPZ local."""
+    filename = f"{event}_{detector}.npz"
+    path = os.path.join(npz_dir, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"NPZ file not found: {path}")
+    return path
+
+
+def load_npz(path: str):
+    """Charge un fichier NPZ."""
+    z = np.load(path)
+    return (
+        np.asarray(z["data"], float),
+        float(z["fs"]),
+        float(z["t0"]),
+        float(z["t1"]),
+    )
+
+
+def crop_array(x, fs, t0_arr, t_start, t_end):
+    """Extrait un segment temporel d'un array."""
+    i0 = int((t_start - t0_arr) * fs)
+    i1 = int((t_end - t0_arr) * fs)
+    return x[max(i0, 0):max(i1, 0)]
+
 
 def load_event_params(path: str) -> Dict[str, Any]:
+    """Charge les paramètres des événements depuis un JSON."""
     with open(path, "r") as f:
         return json.load(f)
 
@@ -81,6 +109,7 @@ EVENT_PARAMS: Dict[str, Any] = _load_default_event_params()
 
 
 def get_event_gps(event: str, params: Dict[str, Any]) -> float:
+    """Récupère le temps GPS d'un événement."""
     evp = params.get(event, {})
     if isinstance(evp, dict):
         if "gps" in evp:
@@ -90,15 +119,12 @@ def get_event_gps(event: str, params: Dict[str, Any]) -> float:
     return float(datasets.event_gps(event))
 
 
-def fetch(det: str, t0: float, t1: float, cache: bool = True) -> TimeSeries:
-    return TimeSeries.fetch_open_data(det, t0, t1, cache=cache)
-
-
 # ------------------
 # Utils
 # ------------------
 
 def robust_peak(x: np.ndarray, q: float = 99.5) -> float:
+    """Calcule un peak robuste via percentile."""
     x = np.asarray(x, float)
     if x.size == 0:
         return 0.0
@@ -106,6 +132,7 @@ def robust_peak(x: np.ndarray, q: float = 99.5) -> float:
 
 
 def safe_bandpass(x: np.ndarray, fs: float, f1: float, f2: float, order: int = 4) -> np.ndarray:
+    """Filtre passe-bande avec fenêtre Tukey."""
     x = np.asarray(x, float)
     nyq = 0.5 * fs
     f2_safe = min(float(f2), 0.95 * nyq)
@@ -113,6 +140,10 @@ def safe_bandpass(x: np.ndarray, fs: float, f1: float, f2: float, order: int = 4
     if f2_safe <= f1_safe:
         f2_safe = min(0.95 * nyq, f1_safe + 10.0)
     sos = butter(order, [f1_safe, f2_safe], btype="bandpass", fs=fs, output="sos")
+    padlen = 3 * (sos.shape[0] - 1)
+    if x.size <= padlen:
+        return np.zeros_like(x)
+
     y = sosfiltfilt(sos, x)
     win = tukey(len(y), 0.05)
     return y * win
@@ -128,6 +159,9 @@ def psd_welch_median(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """PSD robuste par médiane de Welch (fenêtre Tukey), tolérante aux NaN."""
     x = np.asarray(x, float)
+    if x.size < 8:
+        f = np.fft.rfftfreq(max(8, int(fs)), d=1.0 / fs)
+        return f, np.ones_like(f) * 1e-44
 
     if not np.isfinite(x).all():
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
@@ -144,6 +178,8 @@ def psd_welch_median(
     specs = []
     for i in range(0, x.size - nseg + 1, nhop):
         seg = x[i:i + nseg]
+        if seg.size < 8:
+            continue
 
         if not np.isfinite(seg).all():
             seg = np.nan_to_num(seg, nan=0.0, posinf=0.0, neginf=0.0)
@@ -179,6 +215,7 @@ def psd_welch_median(
     S = np.maximum(S, 1e-60)
     return f, S
 
+
 def sanitize_psd(f: np.ndarray, S: np.ndarray, name: str = "PSD") -> Tuple[np.ndarray, np.ndarray]:
     """Nettoie une PSD : garantit finie, >0, et interp stable."""
     f = np.asarray(f, float)
@@ -200,8 +237,10 @@ def sanitize_psd(f: np.ndarray, S: np.ndarray, name: str = "PSD") -> Tuple[np.nd
     S2 = np.maximum(S2, 1e-60)
     return f, S2
 
+
 def spectral_bandwidth_features(freq_hz: np.ndarray, spec: np.ndarray) -> dict:
     """
+    Calcule les caractéristiques de bande passante spectrale.
     freq_hz : array 1D croissant
     spec    : array 1D >=0 (ex: |H(f)|^2, ou densité d'énergie spectrale)
     Retourne f10, f50, f90, dnu_80, mu_f, sigma_f.
@@ -298,6 +337,7 @@ def estimate_delay_time(x: np.ndarray, y: np.ndarray, fs: float, max_delay_ms: f
     
     return float(lag)
 
+
 def nu_eff_energy(f: np.ndarray, dEdf: np.ndarray) -> float:
     """nu_eff = int f dEdf / int dEdf, garde-fous den>0."""
     f = np.asarray(f, float)
@@ -314,6 +354,7 @@ def nu_eff_energy(f: np.ndarray, dEdf: np.ndarray) -> float:
 
 @njit(cache=True, fastmath=True)
 def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
+    """Calcul optimisé de l'énergie cohérente (H1+H2 seulement)."""
     n = H1.shape[0]
     out = np.empty(n, dtype=np.float64)
     eps = 1e-30
@@ -351,6 +392,7 @@ class Bands:
     tau_band: Tuple[float, float]
     nu_band: Tuple[float, float]
 
+
 def analyze_event(
     event: str,
     params: Dict[str, Any],
@@ -361,13 +403,34 @@ def analyze_event(
     distance_mpc: float,
     bands: Bands,
     use_virgo: bool,
+    npz_dir: str = "data/npz",
     peak_norm: bool = False,
-    peak_quantile: float = 0,
+    peak_quantile: float = 99.5,
     hstar_in: float = DEFAULT_HSTAR,
     scale_ej_in: float = DEFAULT_SCALE_EJ,
     plot: bool = False,
     return_internals: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Analyse spectrale d'un événement gravitationnel.
+    
+    Args:
+        event: Nom de l'événement (ex: GW150914)
+        params: Dictionnaire des paramètres d'événements
+        flow, fhigh: Bande de fréquence d'analyse [Hz]
+        signal_win: Fenêtre temporelle du signal [s]
+        noise_pad: Padding avant le signal pour estimer le bruit [s]
+        distance_mpc: Distance de l'événement [Mpc]
+        bands: Bandes pour tau et nu
+        use_virgo: Utiliser Virgo si disponible
+        npz_dir: Répertoire contenant les fichiers NPZ
+        peak_norm: Normaliser par le peak
+        peak_quantile: Quantile pour le peak
+        hstar_in: Facteur H*
+        scale_ej_in: Facteur d'échelle d'énergie
+        plot: Générer des plots
+        return_internals: Retourner les données internes (pour calibration)
+    """
     # -----------------------------
     # 0) Resolve per-event params
     # -----------------------------
@@ -408,47 +471,65 @@ def analyze_event(
     noise_pad = float(noise_pad)
 
     # -----------------------------
-    # 1) Fetch data window
+    # 1) Load NPZ files
     # -----------------------------
-    # Use GPS as the center. Make sure we have enough pre-trigger for noise estimation.
-    pre = max(1200.0, noise_pad + 450.0)
-    post = max(200.0, noise_pad + 50.0)
-    t0 = gps - pre
-    t1 = gps + post
+    print(f"\n📡 Chargement des données NPZ pour {event}...")
 
-    print(f"\n📡 Telechargement des donnees H1/L1{'/V1' if use_virgo else ''} pour {event}...")
-    tsH = fetch("H1", t0, t1)
-    tsL = fetch("L1", t0, t1)
+    try:
+        pH = get_npz_path(event, "H1", npz_dir)
+        pL = get_npz_path(event, "L1", npz_dir)
+    except FileNotFoundError as e:
+        raise RuntimeError(f"[FATAL] Fichiers NPZ manquants pour {event}: {e}")
 
-    tsV = None
+    hH, fsH, t0H, t1H = load_npz(pH)
+    hL, fsL, t0L, t1L = load_npz(pL)
+
+    if fsH != fsL:
+        raise RuntimeError("Sample rate mismatch H1/L1")
+
+    fs = fsH
     used = ["H1", "L1"]
+
+    # ---------- Virgo (V1) ----------
+    hV = fsV = t0V = t1V = None
+
     if use_virgo:
         try:
-            tsV = fetch("V1", t0, t1)
-            used.append("V1")
-        except Exception as e:
-            print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
-            tsV = None
+            pV = get_npz_path(event, "V1", npz_dir)
+            hV, fsV, t0V, t1V = load_npz(pV)
 
-    fs = float(tsH.sample_rate.value)
+            if fsV != fs:
+                raise RuntimeError("Sample rate mismatch V1")
+
+            used.append("V1")
+            print(f"[INFO] Virgo (V1) chargé pour {event}")
+        except (FileNotFoundError, Exception) as e:
+            print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
+            hV = None
 
     # -----------------------------
     # 2) Noise segment for PSD
     # -----------------------------
     n0 = gps - noise_pad - 400.0
     n1 = gps - noise_pad - 200.0
-    if n0 < float(tsH.t0.value):
-        n0 = float(tsH.t0.value)
-        n1 = n0 + 200.0
+    # clamp to NPZ bounds
+    if n0 < t0H:
+        n0 = t0H
+        n1 = min(n0 + 200.0, t1H)
 
-    noiseH = np.asarray(tsH.crop(n0, n1).value, float)
-    noiseL = np.asarray(tsL.crop(n0, n1).value, float)
+    noiseH = crop_array(hH, fs, t0H, n0, n1)
+    noiseL = crop_array(hL, fs, t0L, n0, n1)
 
-    noiseH = np.nan_to_num(noiseH, nan=0.0, posinf=0.0, neginf=0.0)
-    noiseL = np.nan_to_num(noiseL, nan=0.0, posinf=0.0, neginf=0.0)
-
+    # PSD H1/L1 (obligatoires)
     f_psd_H, S1 = psd_welch_median(noiseH, fs, fmin=flow, fmax=fhigh)
     f_psd_L, S2 = psd_welch_median(noiseL, fs, fmin=flow, fmax=fhigh)
+
+    # PSD V1 (optionnelle)
+    if hV is not None:
+        noiseV = crop_array(hV, fs, t0V, n0, n1)
+        f_psd_V, S3 = psd_welch_median(noiseV, fs, fmin=flow, fmax=fhigh)
+    else:
+        f_psd_V = S3 = None
 
     f_psd_H, S1 = sanitize_psd(f_psd_H, S1, name="PSD_H1")
     f_psd_L, S2 = sanitize_psd(f_psd_L, S2, name="PSD_L1")
@@ -457,29 +538,31 @@ def analyze_event(
     # 3) Tau (H1-L1) estimation
     # -----------------------------
     tb0, tb1 = bands.tau_band
-    seg_tau_H = np.asarray(tsH.crop(gps - 0.2, gps + 0.2).value, float)
-    seg_tau_L = np.asarray(tsL.crop(gps - 0.2, gps + 0.2).value, float)
+    seg_tau_H = crop_array(hH, fs, t0H, gps - 0.2, gps + 0.2)
+    seg_tau_L = crop_array(hL, fs, t0L, gps - 0.2, gps + 0.2)
 
-    x_tau = safe_bandpass(seg_tau_H, fs, tb0, tb1)
-    y_tau = safe_bandpass(seg_tau_L, fs, tb0, tb1)
-    tau_hl = estimate_delay_time(x_tau, y_tau, fs, max_delay_ms=15.0)
-    tau_hl = -abs(float(tau_hl))
+    x_tau = safe_bandpass(seg_tau_H, fs, *bands.tau_band)
+    y_tau = safe_bandpass(seg_tau_L, fs, *bands.tau_band)
+
+    tau_hl = -abs(estimate_delay_time(x_tau, y_tau, fs))
     tau_hl_cal = float(hstar_in) * tau_hl
+
     # -----------------------------
     # 4) Signal segment
     # -----------------------------
     s0 = gps - (signal_win / 2.0)
     s1 = gps + (signal_win / 2.0)
-    hH_raw = np.asarray(tsH.crop(s0, s1).value, float)
-    hL_raw = np.asarray(tsL.crop(s0, s1).value, float)
+    hH_raw = crop_array(hH, fs, t0H, s0, s1)
+    hL_raw = crop_array(hL, fs, t0L, s0, s1)
 
-    # Apply H_STAR
-    hH = hH_raw
-    hL = hL_raw
+    if hV is not None:
+        hV_raw = crop_array(hV, fs, t0V, s0, s1)
+    else:
+        hV_raw = None
 
     # Bandpass for analysis band
-    hH_f = safe_bandpass(hH, fs, flow, fhigh)
-    hL_f = safe_bandpass(hL, fs, flow, fhigh)
+    hH_f = safe_bandpass(hH_raw, fs, flow, fhigh)
+    hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
 
     peak_ref = max(robust_peak(hH_f, peak_quantile), robust_peak(hL_f, peak_quantile))
     if peak_norm and peak_ref > 0:
@@ -497,7 +580,7 @@ def analyze_event(
 
     mask = (f >= flow) & (f <= min(fhigh, 0.95 * (0.5 * fs)))
     if not np.any(mask):
-        raise RuntimeError(f"[FATAL] Bande vide apres masque: flow={flow} fhigh={fhigh} fs={fs} event={event}")
+        raise RuntimeError(f"[FATAL] Bande vide après masque: flow={flow} fhigh={fhigh} fs={fs} event={event}")
 
     f_use = f[mask]
     H1 = H1[mask]
@@ -514,7 +597,7 @@ def analyze_event(
     phi = (2.0 * np.pi * f_use * tau_hl).astype(np.float64)
     r = float(distance_mpc) * Mpc
 
-    # whitened coherent sum
+    # whitened coherent sum (H1 + H2 seulement, V1 ignoré pour simplifier)
     Hw1 = H1 / np.sqrt(S1i)
     Hw2 = H2 / np.sqrt(S2i)
 
@@ -526,6 +609,9 @@ def analyze_event(
         Hw2 = np.zeros_like(Hw2)
 
     Hc = Hw1 + Hw2 * np.exp(-1j * phi)
+
+    # Note: L'ajout de Virgo (V1) nécessiterait un délai H-V et est omis pour simplifier
+    # Si vous voulez l'ajouter, calculez tau_HV et ajoutez H3 de manière similaire
 
     # taper edges in frequency
     bw = max(1e-9, float(f_use[-1] - f_use[0]))
@@ -541,12 +627,12 @@ def analyze_event(
 
     dEdf = (np.abs(Hc) ** 2) * psi2
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
-    # calcul interne (ne jamais modifier après)
+
     # -------------------------------------------------
     # Énergie spectrale (base immuable)
     # -------------------------------------------------
-    E_internal = float(trapezoid(dEdf, f_use))*NORM_EJ
-    energy_J = float(E_internal * scale_ej_in)
+    E_internal = float(trapezoid(dEdf, f_use)) * NORM_EJ * scale_ej_in
+    energy_J = float(E_internal)
 
     # -------------------------------------------------
     # Bandwidths & nu_eff
@@ -573,6 +659,7 @@ def analyze_event(
 
     nu_eff = nu_eff_energy(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else 0.0
     nu_eff_raw = nu_eff_energy(f_use, dEdf)
+
 
     # -------------------------------------------------
     # Mass equivalent
@@ -631,6 +718,7 @@ def analyze_event(
     print(f"=== ANALYSE SPECTRALE {event} ===")
     print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
     print(f"nu_eff  = {nu_eff:.2f} Hz")
+    print(f"Tau (H1-L1): {tau_hl:.6e} s")
 
     return out
 
@@ -980,3 +1068,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

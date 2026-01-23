@@ -109,13 +109,6 @@ mkdir -p results
 LOG="results/events.log"
 : > "$LOG"
 
-# -----------------------------------------------------------------------------
-# Main loop
-# -----------------------------------------------------------------------------
-echo "====================== SYNTHÈSE PROGRESSIVE =========================================================================="
-printf "Event                 |   ν_eff | ν_ref  |   τ[s]   | τ_ref   |  M⊙c²  | M⊙c²_r |  Energie[J] |  E_ref[J]  | Notes\n"
-echo "----------------------------------------------------------------------------------------------------------------------"
-
 # ---- build list of events from JSON (ignore meta/default) ----
 mapfile -t EVENTS < <(jq -r 'keys[] | select(. != "_meta" and . != "default")' "$PARAMS")
 [[ "${#EVENTS[@]}" -gt 0 ]] || die "Aucun event trouve dans $PARAMS (hors _meta/default)."
@@ -132,11 +125,9 @@ for ev in "${EVENTS[@]}"; do
     "$PY" "$SCRIPT"
     --event "$ev"
     --event-params "$PARAMS"
+    --no-virgo
   )
 
-  if [[ -n "${NO_VIRGO:-}" ]]; then
-    CMD+=(--no-virgo)
-  fi
 
   # ⚠️ calibration UNIQUEMENT en mode global
   if [[ "$CAL_MODE" == "global" ]]; then

@@ -80,6 +80,71 @@ def spectral_cdf_quantiles(
         out.append(float(np.interp(float(q), cdf, f)))
     return out
 
+def load_cluster_assignments(
+    results_glob: str = "results/GW*.json",
+    f_split: float = 150.0,
+    db_eps: float = 1.4,
+    db_min_samples: int = 3,
+    k: int = 4,
+    seed: int = 42,
+):
+    """
+    API programme pour clustering :
+    retourne
+      - event_to_cluster: dict[event -> cluster_id]
+      - feats: liste Features
+    """
+
+    paths = sorted(glob.glob(results_glob))
+    if not paths:
+        raise FileNotFoundError(f"No files matched: {results_glob}")
+
+    feats = []
+    for p in paths:
+        ft = compute_features_from_json(p, f_split=f_split)
+        if ft is not None:
+            feats.append(ft)
+
+    if len(feats) < 2:
+        raise ValueError("Not enough events for clustering")
+
+    order = ["logE", "nu_mean", "nu_peak", "nu_invf",
+             "frac_bw", "Q_eff", "peak_rel", "R_LH"]
+
+    X = np.array([f.as_row(order) for f in feats], dtype=float)
+
+    # Robust NaN handling
+    X2 = X.copy()
+    for j in range(X2.shape[1]):
+        col = X2[:, j]
+        m = np.isfinite(col)
+        med = float(np.median(col[m])) if np.any(m) else 0.0
+        col[~m] = med
+        X2[:, j] = col
+
+    Z = StandardScaler().fit_transform(X2)
+
+    # DBSCAN (outliers)
+    db = DBSCAN(eps=db_eps, min_samples=db_min_samples)
+    labels_db = db.fit_predict(Z)
+    inlier_mask = labels_db != -1
+
+    if inlier_mask.sum() < max(2, k):
+        raise ValueError("Not enough inliers after DBSCAN")
+
+    # KMeans on inliers
+    km = KMeans(n_clusters=k, random_state=seed, n_init="auto")
+    labels_in = km.fit_predict(Z[inlier_mask])
+
+    labels = np.full(Z.shape[0], -1, dtype=int)
+    labels[inlier_mask] = labels_in
+
+    event_to_cluster = {
+        ft.event: int(lab)
+        for ft, lab in zip(feats, labels)
+    }
+
+    return event_to_cluster, feats
 
 # -----------------------
 # Features
