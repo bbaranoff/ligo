@@ -1,8 +1,3 @@
-Parfait — voici le **README final**, cohérent de bout en bout, avec **exactement** les commandes que tu utilises réellement.
-Prêt à être copié/collé tel quel.
-
----
-
 # LIGO Spectral Calibration — Pipeline expérimental
 
 Ce dépôt implémente un pipeline expérimental pour analyser des événements LIGO/Virgo à partir des **strain time series**, produire des observables spectro-temporelles homogènes, puis étudier leur **calibrabilité mutuelle** via une calibration itérative non supervisée.
@@ -160,9 +155,3 @@ Les événements exclus (outliers) correspondent généralement à :
 
 > Ce pipeline montre qu’un sous-ensemble d’événements LIGO est mutuellement calibrable à partir de la seule structure spectro-temporelle du strain, via un choix contrôlé de fenêtre temporelle et une mise à l’échelle énergétique globale.
 
----
-
-Si tu veux, prochaine étape possible :
-
-* ajouter une section *Méthodologie mathématique*,
-* ou un *schéma de dépendance des données* (strain → features → clusters → stats).
