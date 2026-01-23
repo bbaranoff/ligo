@@ -594,7 +594,7 @@ def analyze_event(
     S1i = np.maximum(S1i, 1e-60)
     S2i = np.maximum(S2i, 1e-60)
 
-    phi = (2.0 * np.pi * f_use * tau_hl).astype(np.float64)
+    phi = (2.0 * np.pi * f_use * tau_hl_cal).astype(np.float64)
     r = float(distance_mpc) * Mpc
 
     # whitened coherent sum (H1 + H2 seulement, V1 ignoré pour simplifier)
