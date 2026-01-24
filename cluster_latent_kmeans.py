@@ -2,457 +2,739 @@
 # -*- coding: utf-8 -*-
 
 """
-Pipeline clustering "from raw LIGO results json" (results/GW*.json)
+cluster_latent_kmeans.py
+========================
 
-But:
-  1) Écrémer les outliers en amont avec DBSCAN (label = -1)
-  2) Clustering fin du noyau restant avec KMeans (labels 0..k-1)
-
-Inputs:
-  - freq_Hz
-  - dEdf_internal
-  - (optionnel) E_total_J si présent (pas utilisé ici)
+Module de clustering intelligent pour les événements d'ondes gravitationnelles LIGO.
+Supporte HDBSCAN, DBSCAN et KMeans avec sélection automatique et API unifiée.
 
 Features:
-  logE, nu_mean, nu_peak, nu_invf, frac_bw, Q_eff, peak_rel, R_LH
+- Extraction automatique de caractéristiques depuis les résultats JSON
+- Normalisation StandardScaler pour une meilleure stabilité
+- Support multi-algorithme : HDBSCAN (par défaut), DBSCAN, KMeans
+- Détection automatique des outliers
+- Visualisation optionnelle (matplotlib)
+- API backward-compatible
 
-Sortie:
-  - clusters report (inclut CLUSTER -1 = outliers DBSCAN)
-  - optionnel: CSV features+label
+Author: Enhanced version
+Date: 2025
 """
 
 from __future__ import annotations
 
-import argparse
 import glob
 import json
-import os
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+import warnings
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np
-
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans, DBSCAN
-from sklearn.decomposition import PCA
+
+# Imports conditionnels pour les algorithmes de clustering
+try:
+    import hdbscan
+    HAS_HDBSCAN = True
+except ImportError:
+    HAS_HDBSCAN = False
+    warnings.warn("hdbscan non disponible. Utiliser DBSCAN ou KMeans à la place.")
+
+try:
+    from sklearn.cluster import DBSCAN, KMeans
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+    raise ImportError("scikit-learn est requis pour ce module")
+
+# Imports optionnels pour visualisation
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 
-# -----------------------
-# Helpers numériques
-# -----------------------
-
-def trapz(y: np.ndarray, x: np.ndarray) -> float:
-    return float(np.trapz(y, x))
-
-
-def safe_log10(x: float, eps: float = 1e-300) -> float:
-    return float(np.log10(max(float(x), eps)))
-
-
-def as_float_array(a) -> np.ndarray:
-    return np.asarray(a, dtype=float)
-
-
-def spectral_cdf_quantiles(
-    f: np.ndarray,
-    w: np.ndarray,
-    qs=(0.10, 0.50, 0.90),
-) -> List[float]:
-    """
-    Quantiles de la distribution définie par w(f) >= 0 (normalisée via intégrale).
-    Retourne f(q) pour q in qs.
-    """
-    f = as_float_array(f)
-    w = np.maximum(as_float_array(w), 0.0)
-
-    tot = trapz(w, f)
-    if not np.isfinite(tot) or tot <= 0.0 or f.size < 4:
-        return [float("nan") for _ in qs]
-
-    # CDF via intégrale cumulée trapz (version discrète stable)
-    df = np.diff(f)
-    mid = 0.5 * (w[:-1] + w[1:])
-    cum = np.concatenate([[0.0], np.cumsum(mid * df)])
-    cdf = cum / cum[-1]
-
-    out = []
-    for q in qs:
-        out.append(float(np.interp(float(q), cdf, f)))
-    return out
-
-def load_cluster_assignments(
-    results_glob: str = "results/GW*.json",
-    f_split: float = 150.0,
-    db_eps: float = 1.4,
-    db_min_samples: int = 3,
-    k: int = 4,
-    seed: int = 42,
-):
-    """
-    API programme pour clustering :
-    retourne
-      - event_to_cluster: dict[event -> cluster_id]
-      - feats: liste Features
-    """
-
-    paths = sorted(glob.glob(results_glob))
-    if not paths:
-        raise FileNotFoundError(f"No files matched: {results_glob}")
-
-    feats = []
-    for p in paths:
-        ft = compute_features_from_json(p, f_split=f_split)
-        if ft is not None:
-            feats.append(ft)
-
-    if len(feats) < 2:
-        raise ValueError("Not enough events for clustering")
-
-    order = ["logE", "nu_mean", "nu_peak", "nu_invf",
-             "frac_bw", "Q_eff", "peak_rel", "R_LH"]
-
-    X = np.array([f.as_row(order) for f in feats], dtype=float)
-
-    # Robust NaN handling
-    X2 = X.copy()
-    for j in range(X2.shape[1]):
-        col = X2[:, j]
-        m = np.isfinite(col)
-        med = float(np.median(col[m])) if np.any(m) else 0.0
-        col[~m] = med
-        X2[:, j] = col
-
-    Z = StandardScaler().fit_transform(X2)
-
-    # DBSCAN (outliers)
-    db = DBSCAN(eps=db_eps, min_samples=db_min_samples)
-    labels_db = db.fit_predict(Z)
-    inlier_mask = labels_db != -1
-
-    if inlier_mask.sum() < max(2, k):
-        raise ValueError("Not enough inliers after DBSCAN")
-
-    # KMeans on inliers
-    km = KMeans(n_clusters=k, random_state=seed, n_init="auto")
-    labels_in = km.fit_predict(Z[inlier_mask])
-
-    labels = np.full(Z.shape[0], -1, dtype=int)
-    labels[inlier_mask] = labels_in
-
-    event_to_cluster = {
-        ft.event: int(lab)
-        for ft, lab in zip(feats, labels)
-    }
-
-    return event_to_cluster, feats
-
-# -----------------------
-# Features
-# -----------------------
+# ============================================================
+# Structure de données pour les caractéristiques
+# ============================================================
 
 @dataclass
-class Features:
+class EventFeatures:
+    """
+    Conteneur pour les caractéristiques spectrales et temporelles d'un événement GW.
+    
+    Attributes:
+        event: Nom de l'événement (ex: GW150914)
+        logE: Log10 de l'énergie [J] (optionnel, non utilisé par défaut)
+        nu_mean: Fréquence effective moyenne [Hz]
+        tau: Délai temporel H1-L1 [s]
+        extra: Dictionnaire pour caractéristiques additionnelles
+    """
     event: str
-    logE: float
-    nu_mean: float
-    nu_peak: float
-    nu_invf: float
-    frac_bw: float
-    Q_eff: float
-    peak_rel: float
-    R_LH: float
-
-    def as_row(self, order: List[str]) -> List[float]:
-        d = self.__dict__
-        return [float(d[k]) for k in order]
-
-
-def compute_features_from_json(path: str, f_split: float) -> Optional[Features]:
-    with open(path, "r") as f:
-        d = json.load(f)
-
-    event = d.get("event") or os.path.splitext(os.path.basename(path))[0]
-
-    f_hz = d.get("freq_Hz")
-    dedf = d.get("dEdf_internal")
-    if f_hz is None or dedf is None:
-        return None
-
-    f_hz = as_float_array(f_hz)
-    dedf = np.maximum(as_float_array(dedf), 0.0)
-
-    if f_hz.size < 8 or dedf.size != f_hz.size:
-        return None
-
-    # Energie interne (unités internes)
-    E_int = trapz(dedf, f_hz)
-    logE = safe_log10(E_int)
-
-    # nu_mean (barycentre énergétique)
-    nu_mean = 0.0
-    if np.isfinite(E_int) and E_int > 0:
-        nu_mean = float(trapz(f_hz * dedf, f_hz) / E_int)
-
-    # nu_peak (fréquence au max)
-    idx = int(np.argmax(dedf)) if dedf.size else 0
-    nu_peak = float(f_hz[idx]) if f_hz.size else 0.0
-
-    # nu_invf = (∫dEdf) / (∫dEdf/f)
-    denom_invf = trapz(dedf / np.maximum(f_hz, 1e-12), f_hz)
-    nu_invf = float(E_int / denom_invf) if np.isfinite(denom_invf) and denom_invf > 0 else 0.0
-
-    # Bande passante: f10, f90 via CDF(dEdf)
-    f10, _f50, f90 = spectral_cdf_quantiles(f_hz, dedf, qs=(0.10, 0.50, 0.90))
-    dnu_80 = float(f90 - f10) if np.isfinite(f90) and np.isfinite(f10) else float("nan")
-
-    # frac_bw = dnu_80 / nu_mean
-    frac_bw = float(dnu_80 / max(nu_mean, 1e-12)) if np.isfinite(dnu_80) else float("nan")
-
-    # Q_eff ~ nu_mean / dnu_80
-    Q_eff = float(max(nu_mean, 1e-12) / max(dnu_80, 1e-12)) if np.isfinite(dnu_80) else float("nan")
-
-    # peak_rel = peak / mean(dEdf)
-    mean_spec = float(np.mean(dedf)) if dedf.size else 0.0
-    peak_rel = float(np.max(dedf) / max(mean_spec, 1e-30)) if mean_spec > 0 else 0.0
-
-    # R_LH = log10(E_low / E_high) autour d'un split
-    mL = f_hz < float(f_split)
-    mH = f_hz >= float(f_split)
-    E_low = trapz(dedf[mL], f_hz[mL]) if np.any(mL) else 0.0
-    E_high = trapz(dedf[mH], f_hz[mH]) if np.any(mH) else 0.0
-    R_LH = float(np.log10((E_low + 1e-30) / (E_high + 1e-30)))
-
-    return Features(
-        event=event,
-        logE=logE,
-        nu_mean=nu_mean,
-        nu_peak=nu_peak,
-        nu_invf=nu_invf,
-        frac_bw=frac_bw,
-        Q_eff=Q_eff,
-        peak_rel=peak_rel,
-        R_LH=R_LH,
-    )
+    logE: float = 0.0
+    nu_mean: float = 0.0
+    tau: float = 0.0
+    extra: Dict[str, Any] = field(default_factory=dict)
+    
+    def row(self, use_logE: bool = False) -> np.ndarray:
+        """
+        Retourne les caractéristiques sous forme de vecteur numpy.
+        
+        Args:
+            use_logE: Si True, inclut logE dans le vecteur (3D: [logE, nu_mean, tau])
+                     Si False, retourne [nu_mean, tau] (2D, par défaut)
+        
+        Returns:
+            Vecteur numpy de caractéristiques
+        """
+        if use_logE:
+            return np.array([self.logE, self.nu_mean, self.tau], dtype=float)
+        else:
+            return np.array([self.nu_mean, self.tau], dtype=float)
+    
+    def __repr__(self) -> str:
+        return (f"EventFeatures(event={self.event!r}, "
+                f"nu_mean={self.nu_mean:.2f} Hz, tau={self.tau:.6e} s)")
 
 
-# -----------------------
-# Report
-# -----------------------
+# ============================================================
+# Extraction des caractéristiques depuis JSON
+# ============================================================
 
-def fmt(x: float, spec: str) -> str:
-    if x is None or not np.isfinite(x):
-        return "NA"
-    return format(float(x), spec)
-
-
-def write_clusters_report(
-    out_path: str,
-    feats: List[Features],
-    labels: np.ndarray,
-    order: List[str],
-    f_split: float,
-    header_extra: str = "",
-) -> None:
-    clusters: Dict[int, List[Features]] = {}
-    for ft, lab in zip(feats, labels):
-        clusters.setdefault(int(lab), []).append(ft)
-
-    lines = []
-    head = f"features: {', '.join(order)} | f_split={float(f_split):.1f}"
-    if header_extra:
-        head += " | " + header_extra
-    lines.append(head)
-    lines.append("")
-
-    for cid in sorted(clusters.keys()):
-        group = clusters[cid]
-
-        mat = np.array([g.as_row(order) for g in group], dtype=float)
-        means = np.nanmean(mat, axis=0)
-
-        means_s = " | ".join(f"{k}={fmt(v, '.3g')}" for k, v in zip(order, means))
-        lines.append(f"=== CLUSTER {cid} ({len(group)}) ===")
-        lines.append("means: " + means_s)
-        lines.append("Event | logE | nu_mean | frac_bw | Q_eff | R_LH")
-        lines.append("-|-|-|-|-|-")
-
-        group_sorted = sorted(group, key=lambda g: (g.nu_mean, g.logE))
-        for g in group_sorted:
-            lines.append(
-                f"{g.event} | "
-                f"{fmt(g.logE, '.3f')} | "
-                f"{fmt(g.nu_mean, '.1f')} | "
-                f"{fmt(g.frac_bw, '.3f')} | "
-                f"{fmt(g.Q_eff, '.3f')} | "
-                f"{fmt(g.R_LH, '.3f')}"
-            )
-        lines.append("")
-
-    with open(out_path, "w") as f:
-        f.write("\n".join(lines))
-
-def write_clusters_json(
-    out_path: str,
-    feats: List[Features],
-    labels: np.ndarray,
-    order: List[str],
-):
-    clusters = {}
-    labels_map = {}
-
-    for ft, lab in zip(feats, labels):
-        cid = int(lab)
-        labels_map[ft.event] = cid
-        clusters.setdefault(cid, []).append(ft)
-
-    out = {
-        "labels": labels_map,
-        "clusters": {}
-    }
-
-    for cid, group in clusters.items():
-        mat = np.array([g.as_row(order) for g in group], dtype=float)
-        means = np.nanmean(mat, axis=0)
-
-        out["clusters"][str(cid)] = {
-            "means": {
-                k: float(v) for k, v in zip(order, means)
-            },
-            "events": {
-                g.event: {
-                    "logE": g.logE,
-                    "nu_mean": g.nu_mean,
-                    "nu_peak": g.nu_peak,
-                    "nu_invf": g.nu_invf,
-                    "frac_bw": g.frac_bw,
-                    "Q_eff": g.Q_eff,
-                    "peak_rel": g.peak_rel,
-                    "R_LH": g.R_LH,
-                }
-                for g in group
-            }
-        }
-
-    with open(out_path, "w") as f:
-        json.dump(out, f, indent=2)
-
-# -----------------------
-# Main
-# -----------------------
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--glob", default="results/GW*.json", help="pattern des JSON results")
-    ap.add_argument("--k", type=int, default=4, help="nombre de clusters KMeans (sur inliers)")
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--f-split", type=float, default=150.0, help="split Hz pour R_LH")
-    ap.add_argument("--json", default=None, help="export clusters + means en JSON")
-    # DBSCAN (filtre outliers)
-    ap.add_argument("--db-eps", type=float, default=1.4, help="DBSCAN eps (en espace standardisé)")
-    ap.add_argument("--db-min-samples", type=int, default=3, help="DBSCAN min_samples")
-
-    # PCA optionnelle pour KMeans (pas pour DBSCAN)
-    ap.add_argument("--pca", type=int, default=0, help="PCA dim pour KMeans (0 = pas de PCA)")
-
-    ap.add_argument("--out", default="clusters_dbscan_kmeans.txt")
-    ap.add_argument("--csv", default=None, help="optionnel: export features+label en CSV")
-    args = ap.parse_args()
-
-    paths = sorted(glob.glob(args.glob))
-    if not paths:
-        raise SystemExit(f"[FATAL] no files matched: {args.glob}")
-
-    feats: List[Features] = []
-    for p in paths:
-        ft = compute_features_from_json(p, f_split=args.f_split)
-        if ft is not None:
-            feats.append(ft)
-
-    if len(feats) < 2:
-        raise SystemExit(f"[FATAL] not enough events (n={len(feats)})")
-
-    order = ["logE", "nu_mean", "nu_peak", "nu_invf", "frac_bw", "Q_eff", "peak_rel", "R_LH"]
-
-    X = np.array([f.as_row(order) for f in feats], dtype=float)
-
-    # Remplace NaN/inf par médiane colonne (robuste)
-    X2 = X.copy()
-    for j in range(X2.shape[1]):
-        col = X2[:, j]
-        m = np.isfinite(col)
-        med = float(np.median(col[m])) if np.any(m) else 0.0
-        col[~m] = med
-        X2[:, j] = col
-
-    # Standardisation globale
-    scaler = StandardScaler()
-    Z = scaler.fit_transform(X2)
-
-    # (1) DBSCAN pour écrémer les outliers
-    db = DBSCAN(eps=float(args.db_eps), min_samples=int(args.db_min_samples))
-    labels_db = db.fit_predict(Z)
-    inlier_mask = labels_db != -1
-
-    n_in = int(inlier_mask.sum())
-    n_out = int((~inlier_mask).sum())
-    if n_in < max(2, int(args.k)):
-        raise SystemExit(
-            f"[FATAL] not enough inliers after DBSCAN for k={args.k} "
-            f"(inliers={n_in}, outliers={n_out}). "
-            f"Try increasing --db-eps or decreasing --db-min-samples."
+def compute_features(
+    path: str,
+    f_split: float = 150.0,
+    verbose: bool = False,
+) -> Optional[EventFeatures]:
+    """
+    Extrait les caractéristiques spectrales d'un fichier JSON d'analyse.
+    
+    Args:
+        path: Chemin vers le fichier JSON
+        f_split: Fréquence de séparation [Hz] (legacy, non utilisé actuellement)
+        verbose: Afficher les warnings
+    
+    Returns:
+        EventFeatures si succès, None si échec
+    """
+    try:
+        with open(path, "r") as f:
+            d = json.load(f)
+        
+        # Nom de l'événement (obligatoire)
+        ev = d.get("event")
+        if ev is None:
+            if verbose:
+                print(f"⚠️  {path}: pas de champ 'event'")
+            return None
+        
+        # Énergie (optionnel, pour visualisation)
+        energy_J = d.get("energy_J", 0.0)
+        if np.isfinite(energy_J) and energy_J > 0:
+            logE = float(np.log10(energy_J))
+        else:
+            logE = 0.0
+        
+        # Fréquence effective (plusieurs formats possibles)
+        nu_eff = 0.0
+        if "nu_eff" in d:
+            nu_obj = d["nu_eff"]
+            if isinstance(nu_obj, dict):
+                # Essayer plusieurs clés possibles
+                for key in ["nu_eff_energy", "mean", "median", "value"]:
+                    if key in nu_obj:
+                        nu_eff = float(nu_obj[key])
+                        break
+            elif isinstance(nu_obj, (int, float)):
+                nu_eff = float(nu_obj)
+        
+        if not np.isfinite(nu_eff):
+            nu_eff = 0.0
+        
+        # Délai temporel H1-L1
+        tau = d.get("tau_hl_s", 0.0)
+        if not np.isfinite(tau):
+            tau = 0.0
+        tau = float(tau)
+        
+        # Caractéristiques additionnelles (optionnel)
+        extra = {}
+        for key in ["m_sun", "distance_mpc", "gps"]:
+            if key in d:
+                val = d[key]
+                if np.isfinite(val):
+                    extra[key] = float(val)
+        
+        return EventFeatures(
+            event=ev,
+            logE=logE,
+            nu_mean=nu_eff,
+            tau=tau,
+            extra=extra,
         )
+        
+    except json.JSONDecodeError as e:
+        if verbose:
+            print(f"⚠️  {path}: JSON invalide - {e}")
+        return None
+    except Exception as e:
+        if verbose:
+            print(f"⚠️  {path}: erreur - {e}")
+        return None
 
-    # (2) KMeans sur les inliers uniquement (éventuellement en PCA)
-    Z_in = Z[inlier_mask]
-    if args.pca and int(args.pca) > 0:
-        pca = PCA(n_components=int(args.pca), random_state=int(args.seed))
-        Zk_in = pca.fit_transform(Z_in)
+
+# ============================================================
+# Clustering unifié
+# ============================================================
+
+def cluster_events(
+    X: np.ndarray,
+    method: str = "hdbscan",
+    **kwargs,
+) -> np.ndarray:
+    """
+    Applique un algorithme de clustering sur les données.
+    
+    Args:
+        X: Matrice de features (n_samples, n_features), déjà normalisée
+        method: Algorithme ('hdbscan', 'dbscan', 'kmeans', 'hdbscan+kmeans')
+        **kwargs: Paramètres spécifiques à l'algorithme
+    
+    Returns:
+        labels: Vecteur de labels de cluster (n_samples,)
+                -1 indique un outlier pour HDBSCAN/DBSCAN
+    
+    Raises:
+        ValueError: Si l'algorithme demandé n'est pas disponible
+    """
+    method = method.lower()
+    
+    # ========== HDBSCAN + KMeans ==========
+    if method == "hdbscan+kmeans":
+        if not HAS_HDBSCAN:
+            raise ValueError("HDBSCAN non disponible. Installer: pip install hdbscan")
+        
+        # Phase 1: HDBSCAN pour détecter les outliers
+        min_cluster_size = kwargs.get("min_cluster_size", 3)
+        min_samples = kwargs.get("min_samples", 2)
+        cluster_selection_epsilon = kwargs.get("cluster_selection_epsilon", 0.0)
+        
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            cluster_selection_epsilon=cluster_selection_epsilon,
+            cluster_selection_method='eom',
+            metric='euclidean',
+        )
+        hdb_labels = clusterer.fit_predict(X)
+        
+        # Séparer outliers (-1) et inliers (≥0)
+        outlier_mask = (hdb_labels == -1)
+        n_outliers = np.sum(outlier_mask)
+        
+        if n_outliers == len(X):
+            # Tous sont outliers, utiliser KMeans sur tout
+            print(f"[INFO] HDBSCAN: tous outliers ({n_outliers}), utilisation de KMeans complet")
+            k = kwargs.get("k", kwargs.get("n_clusters", 3))
+            random_state = kwargs.get("seed", kwargs.get("random_state", 42))
+            clusterer_km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+            return clusterer_km.fit_predict(X)
+        
+        if n_outliers == 0:
+            # Aucun outlier, retourner les clusters HDBSCAN
+            print(f"[INFO] HDBSCAN: aucun outlier, {len(np.unique(hdb_labels))} clusters")
+            return hdb_labels
+        
+        # Phase 2: KMeans sur les inliers
+        print(f"[INFO] HDBSCAN: {n_outliers} outliers détectés, KMeans sur {len(X)-n_outliers} inliers")
+        
+        X_inliers = X[~outlier_mask]
+        k = kwargs.get("k", kwargs.get("n_clusters", 3))
+        random_state = kwargs.get("seed", kwargs.get("random_state", 42))
+        
+        clusterer_km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        km_labels = clusterer_km.fit_predict(X_inliers)
+        
+        # Recombiner: outliers gardent -1, inliers ont leurs nouveaux labels KMeans
+        final_labels = np.full(len(X), -1, dtype=int)
+        final_labels[~outlier_mask] = km_labels
+        
+        return final_labels
+    
+    # ========== HDBSCAN ==========
+    if method == "hdbscan":
+        if not HAS_HDBSCAN:
+            raise ValueError("HDBSCAN non disponible. Installer: pip install hdbscan")
+        
+        min_cluster_size = kwargs.get("min_cluster_size", 3)
+        min_samples = kwargs.get("min_samples", 2)
+        cluster_selection_epsilon = kwargs.get("cluster_selection_epsilon", 0.0)
+        
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            cluster_selection_epsilon=cluster_selection_epsilon,
+            cluster_selection_method='eom',  # Excess of Mass
+            metric='euclidean',
+        )
+        labels = clusterer.fit_predict(X)
+        return labels
+    
+    # ========== DBSCAN ==========
+    elif method == "dbscan":
+        eps = kwargs.get("eps", kwargs.get("db_eps", 0.5))
+        min_samples = kwargs.get("min_samples", kwargs.get("db_min_samples", 3))
+        
+        clusterer = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
+        labels = clusterer.fit_predict(X)
+        return labels
+    
+    # ========== KMeans ==========
+    elif method == "kmeans":
+        k = kwargs.get("k", kwargs.get("n_clusters", 3))
+        random_state = kwargs.get("seed", kwargs.get("random_state", 42))
+        
+        clusterer = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        labels = clusterer.fit_predict(X)
+        return labels
+    
     else:
-        Zk_in = Z_in
+        raise ValueError(f"Méthode inconnue: {method}. Utiliser 'hdbscan', 'dbscan' ou 'kmeans'")
 
-    km = KMeans(
-        n_clusters=int(args.k),
-        random_state=int(args.seed),
-        n_init="auto",
-    )
-    labels_in = km.fit_predict(Zk_in)
 
-    # Labels finaux: -1 pour outliers, 0..k-1 pour inliers
-    labels = np.full(Z.shape[0], -1, dtype=int)
-    labels[inlier_mask] = labels_in
+# ============================================================
+# API principale - Backward compatible
+# ============================================================
 
-    header_extra = (
-        f"DBSCAN(eps={args.db_eps:.3g},min_samples={int(args.db_min_samples)}) "
-        f"-> inliers={n_in} outliers={n_out} ; "
-        f"KMeans(k={int(args.k)})"
-    )
-    write_clusters_report(
-        out_path=args.out,
-        feats=feats,
-        labels=labels,
-        order=order,
-        f_split=args.f_split,
-        header_extra=header_extra,
-    )
-    print(f"[OK] wrote {args.out} (n={len(feats)} inliers={n_in} outliers={n_out} k={args.k} pca={args.pca})")
-    if args.json:
-        write_clusters_json(
-            out_path=args.json,
-            feats=feats,
-            labels=labels,
-            order=order,
-        )
-        print(f"[OK] wrote {args.json}")
+def load_cluster_assignments(
+    results_glob: str,
+    f_split: float = 150.0,
+    method: str = "hdbscan",
+    use_logE: bool = False,
+    normalize: bool = True,
+    verbose: bool = False,
+    seed: int | None = 42,
+    **kwargs,
+) -> Tuple[Dict[str, int], List[EventFeatures]]:
+    """
+    Charge les résultats JSON, extrait les features et effectue le clustering.
+    
+    Args:
+        results_glob: Pattern glob pour les fichiers JSON (ex: "results/GW*.json")
+        f_split: Fréquence de séparation [Hz] (legacy, non utilisé)
+        method: Algorithme de clustering ('hdbscan', 'dbscan', 'kmeans')
+        use_logE: Inclure logE dans les features (3D au lieu de 2D)
+        normalize: Normaliser les features avec StandardScaler
+        verbose: Afficher les informations de debug
+        seed: Random seed pour reproductibilité (KMeans seulement)
+        **kwargs: Paramètres additionnels pour l'algorithme de clustering
+            - HDBSCAN: min_cluster_size, min_samples, cluster_selection_epsilon
+            - DBSCAN: eps (ou db_eps), min_samples (ou db_min_samples)
+            - KMeans: k (ou n_clusters)
+    
+    Returns:
+        event_to_cluster: Dict[event_name -> cluster_id]
+        feats: Liste des EventFeatures extraites
+    
+    Examples:
+        >>> # HDBSCAN avec paramètres par défaut
+        >>> mapping, feats = load_cluster_assignments("results/GW*.json")
+        
+        >>> # DBSCAN avec paramètres personnalisés
+        >>> mapping, feats = load_cluster_assignments(
+        ...     "results/GW*.json",
+        ...     method="dbscan",
+        ...     eps=1.2,
+        ...     min_samples=3
+        ... )
+        
+        >>> # KMeans avec 4 clusters
+        >>> mapping, feats = load_cluster_assignments(
+        ...     "results/GW*.json",
+        ...     method="kmeans",
+        ...     k=4
+        ... )
+    """
+    # 1) Charger les fichiers JSON
+    paths = sorted(glob.glob(results_glob))
+    if len(paths) == 0:
+        raise RuntimeError(f"Aucun fichier trouvé pour pattern: {results_glob}")
+    
+    if verbose:
+        print(f"📂 {len(paths)} fichiers JSON trouvés")
+    
+    # 2) Extraire les features
+    feats = []
+    for p in paths:
+        f = compute_features(p, f_split=f_split, verbose=verbose)
+        if f is not None:
+            feats.append(f)
+    
+    if len(feats) == 0:
+        raise RuntimeError("Aucun événement valide après extraction des features")
+    
+    if verbose:
+        print(f"✅ {len(feats)} événements avec features valides")
+    
+    # 3) Cas particuliers : très peu d'événements
+    if len(feats) == 1:
+        if verbose:
+            print("⚠️  1 seul événement → cluster 0")
+        return {feats[0].event: 0}, feats
+    
+    if len(feats) == 2:
+        if verbose:
+            print("⚠️  2 événements → cluster 0")
+        return {f.event: 0 for f in feats}, feats
+    
+    # 4) Construire la matrice de features
+    X = np.array([f.row(use_logE=use_logE) for f in feats], dtype=float)
+    
+    if verbose:
+        print(f"📊 Matrice de features: {X.shape}")
+        print(f"   Features: {'[logE, nu_mean, tau]' if use_logE else '[nu_mean, tau]'}")
+    
+    # 5) Normalisation (recommandé pour DBSCAN/HDBSCAN)
+    if normalize:
+        scaler = StandardScaler()
+        X_norm = scaler.fit_transform(X)
+        if verbose:
+            print(f"🔧 Normalisation StandardScaler appliquée")
+            print(f"   Mean: {scaler.mean_}")
+            print(f"   Std:  {scaler.scale_}")
+    else:
+        X_norm = X
+    
+    # 6) Clustering
+    if verbose:
+        print(f"🔍 Clustering avec méthode: {method.upper()}")
+    
+    # Transmettre le seed si fourni et pas déjà dans kwargs
+    if seed is not None and 'seed' not in kwargs:
+        kwargs['seed'] = seed
+    
+    labels = cluster_events(X_norm, method=method, **kwargs)
+    
+    # 7) Statistiques
+    unique_labels = np.unique(labels)
+    n_clusters = len(unique_labels[unique_labels >= 0])
+    n_outliers = np.sum(labels == -1)
+    
+    if verbose:
+        print(f"📈 Résultats:")
+        print(f"   Clusters trouvés: {n_clusters}")
+        print(f"   Outliers (label=-1): {n_outliers}")
+        for lbl in sorted(unique_labels):
+            count = np.sum(labels == lbl)
+            print(f"   Cluster {lbl:2}: {count} événements")
+    
+    # 8) Construction du dictionnaire
+    event_to_cluster = {f.event: int(lbl) for f, lbl in zip(feats, labels)}
+    
+    return event_to_cluster, feats
 
-    if args.csv:
-        import csv
-        with open(args.csv, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["event", "cluster"] + order)
-            for ft, lab, row in zip(feats, labels, X):
-                w.writerow([ft.event, int(lab)] + [float(x) for x in row])
-        print(f"[OK] wrote {args.csv}")
 
+# ============================================================
+# Visualisation (optionnel)
+# ============================================================
+
+def plot_clusters(
+    feats: List[EventFeatures],
+    labels: np.ndarray,
+    save_path: Optional[str] = None,
+    show: bool = True,
+) -> None:
+    """
+    Visualise les clusters dans l'espace (nu_mean, tau).
+    
+    Args:
+        feats: Liste des EventFeatures
+        labels: Vecteur de labels de cluster
+        save_path: Si fourni, sauvegarde la figure à ce chemin
+        show: Afficher la figure interactivement
+    """
+    if not HAS_MATPLOTLIB:
+        warnings.warn("matplotlib non disponible. Installer: pip install matplotlib")
+        return
+    
+    # Extraire les coordonnées
+    nu_vals = np.array([f.nu_mean for f in feats])
+    tau_vals = np.array([f.tau for f in feats])
+    
+    # Préparer les couleurs
+    unique_labels = np.unique(labels)
+    n_clusters = len(unique_labels[unique_labels >= 0])
+    
+    # Colormap
+    cmap = plt.cm.get_cmap('tab10', n_clusters)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot chaque cluster
+    for lbl in unique_labels:
+        mask = labels == lbl
+        if lbl == -1:
+            # Outliers en noir avec 'x'
+            ax.scatter(
+                nu_vals[mask],
+                tau_vals[mask],
+                c='black',
+                marker='x',
+                s=100,
+                alpha=0.6,
+                label=f'Outliers (n={np.sum(mask)})'
+            )
+        else:
+            ax.scatter(
+                nu_vals[mask],
+                tau_vals[mask],
+                c=[cmap(lbl)],
+                marker='o',
+                s=80,
+                alpha=0.7,
+                edgecolors='black',
+                linewidths=0.5,
+                label=f'Cluster {lbl} (n={np.sum(mask)})'
+            )
+    
+    ax.set_xlabel('Fréquence effective νₑff [Hz]', fontsize=12)
+    ax.set_ylabel('Délai τ(H1-L1) [s]', fontsize=12)
+    ax.set_title('Clustering des événements GW', fontsize=14, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"💾 Figure sauvegardée: {save_path}")
+    
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
+# ============================================================
+# Utilitaires
+# ============================================================
+
+def get_cluster_summary(
+    event_to_cluster: Dict[str, int],
+    feats: List[EventFeatures],
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Génère un résumé statistique par cluster.
+    
+    Args:
+        event_to_cluster: Mapping event -> cluster_id
+        feats: Liste des EventFeatures
+    
+    Returns:
+        Dict[cluster_id -> stats]
+        où stats contient: n_events, mean_nu, std_nu, mean_tau, std_tau, events
+    """
+    from collections import defaultdict
+    
+    # Grouper par cluster
+    clusters = defaultdict(list)
+    feat_dict = {f.event: f for f in feats}
+    
+    for event, cid in event_to_cluster.items():
+        if event in feat_dict:
+            clusters[cid].append(feat_dict[event])
+    
+    # Calculer les stats
+    summary = {}
+    for cid, cluster_feats in clusters.items():
+        nu_vals = [f.nu_mean for f in cluster_feats]
+        tau_vals = [f.tau for f in cluster_feats]
+        
+        summary[cid] = {
+            'n_events': len(cluster_feats),
+            'mean_nu': float(np.mean(nu_vals)),
+            'std_nu': float(np.std(nu_vals)),
+            'mean_tau': float(np.mean(tau_vals)),
+            'std_tau': float(np.std(tau_vals)),
+            'events': [f.event for f in cluster_feats],
+        }
+    
+    return summary
+
+
+def export_clusters_json(
+    event_to_cluster: Dict[str, int],
+    feats: List[EventFeatures],
+    output_path: str,
+) -> None:
+    """
+    Exporte les assignments de clusters et le résumé en JSON.
+    
+    Args:
+        event_to_cluster: Mapping event -> cluster_id
+        feats: Liste des EventFeatures
+        output_path: Chemin du fichier JSON de sortie
+    """
+    summary = get_cluster_summary(event_to_cluster, feats)
+    
+    data = {
+        'event_to_cluster': event_to_cluster,
+        'cluster_summary': summary,
+        'n_events': len(event_to_cluster),
+        'n_clusters': len([cid for cid in summary.keys() if cid >= 0]),
+        'n_outliers': len([cid for cid in event_to_cluster.values() if cid == -1]),
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(data, f, indent=2)
+    
+    print(f"💾 Clusters exportés: {output_path}")
+
+
+# ============================================================
+# Point d'entrée CLI
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Clustering intelligent pour événements LIGO",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples:
+  # HDBSCAN par défaut
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json"
+  
+  # HDBSCAN puis KMeans sur les inliers (hybride)
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
+      --method hdbscan+kmeans --k 5 --min-cluster-size 3
+  
+  # DBSCAN avec paramètres personnalisés
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
+      --method dbscan --eps 1.2 --min-samples 3
+  
+  # KMeans avec 4 clusters
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
+      --method kmeans --k 4
+  
+  # Avec visualisation et export
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
+      --plot --plot-save clusters.png --export clusters.json
+        """
+    )
+    
+    # Fichiers
+    parser.add_argument(
+        "--results-glob",
+        required=True,
+        help="Pattern glob pour les fichiers JSON (ex: 'results/GW*.json')"
+    )
+    
+    # Méthode de clustering
+    parser.add_argument(
+        "--method",
+        choices=["hdbscan", "dbscan", "kmeans", "hdbscan+kmeans"],
+        default="hdbscan",
+        help="Algorithme de clustering (défaut: hdbscan)"
+    )
+    
+    # HDBSCAN params
+    parser.add_argument("--min-cluster-size", type=int, default=3)
+    parser.add_argument("--min-samples", type=int, default=2)
+    parser.add_argument("--cluster-selection-epsilon", type=float, default=0.0)
+    
+    # DBSCAN params
+    parser.add_argument("--eps", "--db-eps", type=float, default=0.5, dest="eps")
+    parser.add_argument("--db-min-samples", type=int, default=3)
+    
+    # KMeans params
+    parser.add_argument("--k", "--n-clusters", type=int, default=3, dest="k")
+    
+    # Options générales
+    parser.add_argument("--use-logE", action="store_true", help="Inclure logE dans les features")
+    parser.add_argument("--no-normalize", action="store_true", help="Désactiver la normalisation")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--verbose", "-v", action="store_true")
+    
+    # Visualisation
+    parser.add_argument("--plot", action="store_true", help="Afficher un plot des clusters")
+    parser.add_argument("--plot-save", type=str, help="Sauvegarder le plot à ce chemin")
+    parser.add_argument("--no-show", action="store_true", help="Ne pas afficher le plot interactivement")
+    
+    # Export
+    parser.add_argument("--export", type=str, help="Exporter les clusters en JSON")
+    
+    args = parser.parse_args()
+    
+    # Préparer les kwargs pour le clustering
+    kwargs = {}
+    if args.method == "hdbscan":
+        kwargs['min_cluster_size'] = args.min_cluster_size
+        kwargs['min_samples'] = args.min_samples
+        kwargs['cluster_selection_epsilon'] = args.cluster_selection_epsilon
+    elif args.method == "hdbscan+kmeans":
+        kwargs['min_cluster_size'] = args.min_cluster_size
+        kwargs['min_samples'] = args.min_samples
+        kwargs['cluster_selection_epsilon'] = args.cluster_selection_epsilon
+        kwargs['k'] = args.k
+        # Ne pas ajouter seed ici, il est passé explicitement à load_cluster_assignments
+    elif args.method == "dbscan":
+        kwargs['eps'] = args.eps
+        kwargs['min_samples'] = args.db_min_samples
+    elif args.method == "kmeans":
+        kwargs['k'] = args.k
+        # Ne pas ajouter seed ici, il est passé explicitement à load_cluster_assignments
+    
+    try:
+        # Clustering
+        mapping, features = load_cluster_assignments(
+            results_glob=args.results_glob,
+            method=args.method,
+            use_logE=args.use_logE,
+            normalize=not args.no_normalize,
+            verbose=args.verbose,
+            seed=args.seed,
+            **kwargs,
+        )
+        
+        # Affichage des résultats
+        print("\n" + "="*70)
+        print("📊 RÉSULTATS DU CLUSTERING")
+        print("="*70)
+        
+        summary = get_cluster_summary(mapping, features)
+        for cid in sorted(summary.keys()):
+            stats = summary[cid]
+            print(f"\nCluster {cid:2} ({stats['n_events']} événements):")
+            print(f"  νₑff: {stats['mean_nu']:.2f} ± {stats['std_nu']:.2f} Hz")
+            print(f"  τ:    {stats['mean_tau']:.3e} ± {stats['std_tau']:.3e} s")
+            print(f"  Events: {', '.join(sorted(stats['events'])[:5])}" + 
+                  (f" ... (+{len(stats['events'])-5})" if len(stats['events']) > 5 else ""))
+        
+        # Visualisation
+        if args.plot or args.plot_save:
+            labels = np.array([mapping[f.event] for f in features])
+            plot_clusters(
+                feats=features,
+                labels=labels,
+                save_path=args.plot_save,
+                show=(not args.no_show),
+            )
+        
+        # Export JSON
+        if args.export:
+            export_clusters_json(mapping, features, args.export)
+        
+        print("\n✅ Clustering terminé avec succès!")
+        
+    except RuntimeError as e:
+        print(f"❌ Erreur: {e}")
+        exit(1)
+    except Exception as e:
+        print(f"❌ Erreur inattendue: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        exit(1)

@@ -6,17 +6,18 @@ Pipeline complet de calibration par grille exhaustive pour l'analyse spectrale L
 
 Ce script orchestre :
 1. Clustering des événements (via cluster_latent_kmeans.py)
-2. Calibration par grille exhaustive (H_STAR × SCALE_EJ) par cluster
+2. Calibration par grille exhaustive (PEAK_SCALE × TAU_SCALE × SCALE_EJ) par cluster
 3. Analyse finale avec calibration optimale
 4. Génération de rapports détaillés
 
 Principe de calibration :
-- Dans ligo_spectral_planck.py : energy_J = E_internal(H_STAR) × SCALE_EJ
-- Pour chaque H_STAR ∈ [0.5, 2.5] par pas de 0.1 :
-  * Calculer E_internal(H_STAR) pour tous les événements
-  * Trouver le meilleur SCALE_EJ par moindres carrés
-  * Calculer RSS = sum((E_ref - SCALE_EJ × E_internal)^2)
-- Garder la combinaison (H_STAR, SCALE_EJ) qui minimise RSS
+- Dans ligo_spectral_planck.py : energy_J = E_internal(TAU_SCALE, PEAK_SCALE) × SCALE_EJ
+- Pour chaque PEAK_SCALE ∈ [0.5, 2.5] par pas de 0.1 :
+  Pour chaque TAU_SCALE ∈ [0.5, 2.5] par pas de 0.1 :
+    * Calculer E_internal(PEAK_SCALE, TAU_SCALE) pour tous les événements
+    * Trouver le meilleur SCALE_EJ par moindres carrés
+    * Calculer RSS = sum((E_ref - SCALE_EJ × E_internal)^2)
+- Garder la combinaison (PEAK_SCALE, TAU_SCALE, SCALE_EJ) qui minimise RSS
 
 Usage:
     python run_iterative_calibration.py --refs ligo_refs.json --event-params event_params.json
@@ -38,27 +39,34 @@ import cluster_latent_kmeans as clk
 import ligo_spectral_planck as lsp
 
 
-def calibrate_hstar_and_scale_grid(
+def calibrate_peak_tau_and_scale_grid(
     events: List[str],
     params: Dict,
     E_ref_dict: Dict[str, float],
     bands: lsp.Bands,
-    h_min: float = 0.5,
-    h_max: float = 2.5,
-    h_step: float = 0.1,
+    peak_min: float = 1.0,
+    peak_max: float = 1.0,
+    peak_step: float = 1.0,
+    tau_min: float = 1.0,
+    tau_max: float = 1.0,
+    tau_step: float = 1.0,
     **analyze_kwargs,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float]:
     """
-    Calibre H_STAR et SCALE_EJ par recherche exhaustive sur grille.
+    Calibre PEAK_SCALE, TAU_SCALE et SCALE_EJ par recherche exhaustive.
     
-    Pour chaque H_STAR dans [h_min, h_max] avec pas h_step :
-      1. Calculer E_internal(H_STAR) pour tous les événements
-      2. Trouver le meilleur SCALE_EJ par moindres carrés
-      3. Calculer l'erreur RSS
-    
-    Retourner la combinaison (H_STAR, SCALE_EJ) qui minimise RSS.
+    Structure de boucle :
+        for TAU_SCALE in tau_values:
+            for PEAK_SCALE in peak_values:
+                Calculer E_internal(TAU_SCALE, PEAK_SCALE) pour tous les événements
+                Calculer SCALE_EJ optimal = sum(E_ref × E_internal) / sum(E_internal²)
+                Calculer RSS = sum((E_ref - SCALE_EJ × E_internal)²)
+                Si RSS < meilleur : garder (TAU_SCALE, PEAK_SCALE, SCALE_EJ)
     """
-    print(f"  🔧 Calibration grille H_STAR ∈ [{h_min}, {h_max}] pas={h_step}...")
+    print(f"  🔧 Calibration grille (TAU_SCALE puis PEAK_SCALE):")
+    print(f"     TAU_SCALE ∈ [{tau_min}, {tau_max}] pas {tau_step}")
+    print(f"     PEAK_SCALE ∈ [{peak_min}, {peak_max}] pas {peak_step}")
+    print(f"     SCALE_EJ : calculé analytiquement")
     
     # Filtrer événements valides
     valid_events = []
@@ -75,72 +83,92 @@ def calibrate_hstar_and_scale_grid(
     
     if len(valid_events) < 2:
         print(f"    [WARN] Pas assez d'événements valides ({len(valid_events)})")
-        return 1.0, 1.0
+        return 1.0, 1.0, 1.0
     
     E_ref = np.array(E_ref_list)
     
-    # Grille de valeurs H_STAR à tester
-    h_values = np.arange(h_min, h_max + h_step/2, h_step)
-    n_tests = len(h_values)
+    # Grille de valeurs à tester
+    tau_values = np.arange(tau_min, tau_max + tau_step/2, tau_step)
+    peak_values = np.arange(peak_min, peak_max + peak_step/2, peak_step)
     
-    print(f"    Testing {n_tests} valeurs de H_STAR...")
+    n_tests = len(tau_values) * len(peak_values)
     
-    best_h = 1.0
+    print(f"    Testing {len(tau_values)} × {len(peak_values)} = {n_tests} combinaisons...")
+    
+    best_peak = 1.0
+    best_tau = 1.0
     best_scale = 1.0
     best_rss = float('inf')
     best_mae = float('inf')
     
-    for i, h_star in enumerate(h_values):
-        # 1) Calculer E_internal(h_star) pour tous les événements
-        E_internal_list = []
-        for ev in valid_events:
-            try:
-                result = lsp.analyze_event(
-                    event=ev,
-                    params=params,
-                    bands=bands,
-                    hstar_in=h_star,
-                    scale_ej_in=1.0,
-                    plot=False,
-                    return_internals=True,
-                    **analyze_kwargs,
-                )
-                E_int = float(result.get("E_internal", 0.0))
-                E_internal_list.append(E_int if np.isfinite(E_int) and E_int > 0 else 0.0)
-            except Exception:
-                E_internal_list.append(0.0)
-        
-        E_internal = np.array(E_internal_list)
-        
-        # 2) Trouver le meilleur SCALE_EJ pour ce H_STAR (solution fermée)
-        num = float(np.dot(E_ref, E_internal))
-        den = float(np.dot(E_internal, E_internal))
-        
-        if den <= 0 or not np.isfinite(num):
-            continue
-        
-        scale_ej = num / den
-        
-        # 3) Calculer l'erreur avec cette combinaison
-        E_pred = scale_ej * E_internal
-        residuals = E_ref - E_pred
-        rss = float(np.sum(residuals ** 2))
-        rel_errors = 100 * np.abs(residuals / E_ref)
-        mae = float(np.mean(rel_errors))
-        
-        # 4) Garder si c'est le meilleur
-        if rss < best_rss:
-            best_rss = rss
-            best_h = h_star
-            best_scale = scale_ej
-            best_mae = mae
-        
-        # Affichage de chaque test
-        print(f"      [{i+1:2}/{n_tests}] H={h_star:.2f}, S={scale_ej:.3e}, MAE={mae:.2f}%, RSS={rss:.3e}")
+    test_count = 0
     
-    print(f"    ✅ Optimal: H_STAR={best_h:.2f}, SCALE_EJ={best_scale:.6e}, MAE={best_mae:.2f}%, RSS={best_rss:.3e}")
+    # BOUCLE : TAU_SCALE puis PEAK_SCALE
+    for tau_scale in tau_values:
+        for peak_scale in peak_values:
+            test_count += 1
+            
+            # 1) Calculer E_internal(tau_scale, peak_scale) pour tous les événements
+            E_internal_list = []
+            for ev in valid_events:
+                try:
+                    result = lsp.analyze_event(
+                        event=ev,
+                        params=params,
+                        bands=bands,
+                        peak_scale=peak_scale,
+                        tau_scale=tau_scale,
+                        scale_ej_in=1.0,
+                        plot=False,
+                        return_internals=True,
+                        verbose=False,
+                        **analyze_kwargs,
+                    )
+                    E_int = float(result.get("E_internal", 0.0))
+                    E_internal_list.append(E_int if np.isfinite(E_int) and E_int > 0 else 0.0)
+                except Exception:
+                    E_internal_list.append(0.0)
+            
+            E_internal = np.array(E_internal_list)
+            
+            # 2) Calculer SCALE_EJ optimal par moindres carrés
+            # SCALE_EJ = sum(E_ref × E_internal) / sum(E_internal²)
+            num = float(np.dot(E_ref, E_internal))
+            den = float(np.dot(E_internal, E_internal))
+            
+            if den <= 0 or not np.isfinite(num):
+                continue
+
+            scale_ej = num / den
+            E_pred = scale_ej * E_internal
+
+            if not np.all(np.isfinite(E_pred)) or np.all(E_pred <= 0):
+                continue
+
+            E_pred = np.maximum(E_pred, 1e-300)
+            log_res = np.log(E_ref) - np.log(E_pred)
+
+            # 4) Calculer l'erreur
+            rss = float(np.sum(log_res**2))
+            mae = float(np.mean(np.abs(log_res)) * 100)  # % log-error
+            
+            # 5) Garder si RSS < meilleur
+            if rss < best_rss:
+                best_rss = rss
+                best_tau = tau_scale
+                best_peak = peak_scale
+                best_scale = scale_ej
+                best_mae = mae
+            
+            # Affichage périodique
+            if test_count % 10 == 0 or test_count == n_tests:
+                print(f"      [{test_count:3}/{n_tests}] Best: TAU={best_tau:.2f}, PEAK={best_peak:.2f}, "
+                      f"S={best_scale:.3e}, MAE={best_mae:.2f}%, RSS={best_rss:.3e}")
     
-    return best_h, best_scale
+    print(f"    ✅ Optimal: TAU_SCALE={best_tau:.2f}, PEAK_SCALE={best_peak:.2f}, SCALE_EJ={best_scale:.6e}, "
+          f"MAE={best_mae:.2f}%, RSS={best_rss:.3e}")
+    
+    return best_peak, best_tau, best_scale
 
 
 def iterative_calibration(
@@ -151,15 +179,18 @@ def iterative_calibration(
     bands: lsp.Bands,
     max_iter: int = 10,
     tol: float = 1e-4,
-    h_min: float = 0.5,
-    h_max: float = 2.5,
-    h_step: float = 0.1,
+    peak_min: float = 0.5,
+    peak_max: float = 2.5,
+    peak_step: float = 0.1,
+    tau_min: float = 0.5,
+    tau_max: float = 2.5,
+    tau_step: float = 0.1,
     **analyze_kwargs,
-) -> Tuple[float, float, List[Dict]]:
+) -> Tuple[float, float, float, List[Dict]]:
     """
-    Calibration par recherche exhaustive sur grille H_STAR.
+    Calibration par recherche exhaustive sur grille PEAK_SCALE × TAU_SCALE.
     
-    Pour chaque H_STAR testé, trouve le meilleur SCALE_EJ,
+    Pour chaque (PEAK_SCALE, TAU_SCALE) testé, trouve le meilleur SCALE_EJ,
     puis garde la combinaison qui minimise l'erreur globale.
     """
     print(f"\n{'='*70}")
@@ -169,42 +200,49 @@ def iterative_calibration(
     valid_events = [e for e in events if e in E_ref_dict]
     if len(valid_events) < 2:
         print(f"⚠️  Cluster {cluster_id}: pas assez d'events avec refs ({len(valid_events)})")
-        print(f"    -> calibration par défaut (H_STAR=1.0, SCALE_EJ=1.0)")
-        return 1.0, 1.0, []
+        print(f"    -> calibration par défaut (PEAK_SCALE=1.0, TAU_SCALE=1.0, SCALE_EJ=1.0)")
+        return 1.0, 1.0, 1.0, []
     
     print(f"Événements valides: {len(valid_events)}")
-    print(f"Recherche exhaustive: H_STAR ∈ [{h_min}, {h_max}], pas={h_step}")
+    print(f"Recherche exhaustive: PEAK_SCALE ∈ [{peak_min}, {peak_max}] × TAU_SCALE ∈ [{tau_min}, {tau_max}]")
+    print(f"                      pas PEAK={peak_step}, TAU={tau_step}")
     
     # Calibration directe par grille
-    h_star, scale_ej = calibrate_hstar_and_scale_grid(
+    peak_scale, tau_scale, scale_ej = calibrate_peak_tau_and_scale_grid(
         events=valid_events,
         params=params,
         E_ref_dict=E_ref_dict,
         bands=bands,
-        h_min=h_min,
-        h_max=h_max,
-        h_step=h_step,
+        peak_min=peak_min,
+        peak_max=peak_max,
+        peak_step=peak_step,
+        tau_min=tau_min,
+        tau_max=tau_max,
+        tau_step=tau_step,
         **analyze_kwargs,
     )
     
     history = [{
         'iteration': 1,
-        'h_star': h_star,
+        'peak_scale': peak_scale,
+        'tau_scale': tau_scale,
         'scale_ej': scale_ej,
-        'K': h_star * scale_ej,
-        'delta_h': 0.0,
+        'K': peak_scale * tau_scale * scale_ej,
+        'delta_peak': 0.0,
+        'delta_tau': 0.0,
         'delta_s': 0.0,
     }]
     
     print(f"\n{'='*70}")
     print(f"📊 CALIBRATION FINALE CLUSTER {cluster_id}")
     print(f"{'='*70}")
-    print(f"H_STAR   = {h_star:.6e}")
-    print(f"SCALE_EJ = {scale_ej:.6e}")
-    print(f"K = H×S  = {h_star * scale_ej:.6e}")
+    print(f"PEAK_SCALE = {peak_scale:.6e}")
+    print(f"TAU_SCALE  = {tau_scale:.6e}")
+    print(f"SCALE_EJ   = {scale_ej:.6e}")
+    print(f"K = PEAK×TAU×S = {peak_scale * tau_scale * scale_ej:.6e}")
     print(f"{'='*70}")
     
-    return h_star, scale_ej, history
+    return peak_scale, tau_scale, scale_ej, history
 
 
 def compute_errors(
@@ -237,7 +275,7 @@ def compute_errors(
 def write_report(
     out_path: str,
     event_to_cluster: Dict[str, int],
-    cluster_calib: Dict[int, Tuple[float, float]],
+    cluster_calib: Dict[int, Tuple[float, float, float]],
     cluster_history: Dict[int, List[Dict]],
     results: Dict[str, Dict],
     errors: Dict[str, float],
@@ -298,24 +336,29 @@ def write_report(
     # Par cluster
     for cid in sorted(clusters.keys()):
         events = sorted(clusters[cid])
-        hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0))
+        hpeak, hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0, 1.0))
         history = cluster_history.get(cid, [])
         
         lines.append(f"\n{'='*100}")
         lines.append(f"CLUSTER {cid} ({len(events)} événements)")
         lines.append(f"{'='*100}")
-        lines.append(f"Calibration finale: H_STAR = {hstar:.6e}, SCALE_EJ = {scale_ej:.6e}, K = {hstar*scale_ej:.6e}")
+        lines.append(f"Calibration finale: H_PEAK = {hpeak:.6e}, H_STAR = {hstar:.6e}, "
+                    f"SCALE_EJ = {scale_ej:.6e}, K = {hpeak*hstar*scale_ej:.6e}")
         lines.append("")
         
         # Historique de convergence
         if history:
             lines.append(f"📈 HISTORIQUE DE CONVERGENCE:")
-            lines.append(f"Iter | H_STAR      | SCALE_EJ    | K=H×S       | ΔH     | ΔS")
-            lines.append("-" * 80)
+            lines.append(
+                "Cluster | N events | Iter | MAE (%) | Médiane (%) | PEAK_SCALE | TAU_SCALE | SCALE_EJ | K"
+            )
+            lines.append("-" * 100)
             for h in history:
                 lines.append(
-                    f"{h['iteration']:4} | {h['h_star']:.6e} | {h['scale_ej']:.6e} | "
-                    f"{h['K']:.6e} | {h['delta_h']:.2e} | {h['delta_s']:.2e}"
+                    f"{h['iteration']:4} | "
+                    f"{h['peak_scale']:.6e} | {h['tau_scale']:.6e} | "
+                    f"{h['scale_ej']:.6e} | {h['K']:.6e} | "
+                    f"{h['delta_peak']:.2e} | {h['delta_tau']:.2e} | {h['delta_s']:.2e}"
                 )
             lines.append("")
         
@@ -363,12 +406,12 @@ def write_report(
     lines.append("📊 COMPARAISON INTER-CLUSTERS")
     lines.append(f"{'='*100}")
     lines.append("")
-    lines.append("Cluster | N events | Iter | MAE (%)  | Médiane (%) | H_STAR     | SCALE_EJ   | K=H×S")
+    lines.append("Cluster | N events | Iter | MAE (%)  | Médiane (%) | H_PEAK     | H_STAR     | SCALE_EJ   | K=HP×H×S")
     lines.append("-" * 100)
     
     for cid in sorted(clusters.keys()):
         events = clusters[cid]
-        hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0))
+        hpeak, hstar, scale_ej = cluster_calib.get(cid, (1.0, 1.0, 1.0))
         history = cluster_history.get(cid, [])
         n_iter = len(history)
         cluster_errors = [abs(errors[e]) for e in events if e in errors]
@@ -381,7 +424,7 @@ def write_report(
         
         lines.append(
             f"{cid:>7} | {len(events):>8} | {n_iter:>4} | {mae:>8.2f} | {med:>11.2f} | "
-            f"{hstar:>10.6e} | {scale_ej:>10.6e} | {hstar*scale_ej:>10.6e}"
+            f"{hpeak:>10.6e} | {hstar:>10.6e} | {scale_ej:>10.6e} | {hpeak*hstar*scale_ej:>10.6e}"
         )
     
     # Meilleurs/pires fits
@@ -429,11 +472,19 @@ def main():
     ap.add_argument("--db-min-samples", type=int, default=3, help="DBSCAN min_samples")
     ap.add_argument("--f-split", type=float, default=150.0, help="Split Hz pour R_LH")
     ap.add_argument("--seed", type=int, default=42)
-    
+    ap.add_argument("--method", default="hdbscan+kmeans")
+    ap.add_argument("--min-cluster-size", type=int, default=5)
+    ap.add_argument("--min-samples", type=int, default=3)
+    ap.add_argument("--cluster-selection-epsilon", type=float, default=0.0)
+    ap.add_argument("--use-logE", action="store_true")
+
     # Iterative calibration
-    ap.add_argument("--h-min", type=float, default=0.5, help="H_STAR minimum grille")
-    ap.add_argument("--h-max", type=float, default=2.5, help="H_STAR maximum grille")
-    ap.add_argument("--h-step", type=float, default=0.1, help="Pas de la grille H_STAR")
+    ap.add_argument("--peak-min", type=float, default=0.5, help="PEAK_SCALE minimum grille")
+    ap.add_argument("--peak-max", type=float, default=2.5, help="PEAK_SCALE maximum grille")
+    ap.add_argument("--peak-step", type=float, default=0.1, help="Pas de la grille PEAK_SCALE")
+    ap.add_argument("--tau-min", type=float, default=0.5, help="TAU_SCALE minimum grille")
+    ap.add_argument("--tau-max", type=float, default=2.5, help="TAU_SCALE maximum grille")
+    ap.add_argument("--tau-step", type=float, default=0.1, help="Pas de la grille TAU_SCALE")
     
     # Analysis params
     ap.add_argument("--flow", type=float, default=None)
@@ -480,13 +531,15 @@ def main():
     print("\n🔍 Clustering des événements...")
     event_to_cluster, feats = clk.load_cluster_assignments(
         results_glob=args.results_glob,
+        method=args.method,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        cluster_selection_epsilon=args.cluster_selection_epsilon,
+        use_logE=args.use_logE,
         f_split=args.f_split,
-        db_eps=args.db_eps,
-        db_min_samples=args.db_min_samples,
         k=args.k,
         seed=args.seed,
     )
-    
     clusters = defaultdict(list)
     for event, cid in event_to_cluster.items():
         clusters[cid].append(event)
@@ -518,23 +571,26 @@ def main():
     for cid in sorted(clusters.keys()):
         if cid == -1 and args.exclude_cluster_minus1:
             print(f"\n⭐ Cluster -1 (outliers): skipped (using default calibration)")
-            cluster_calib[cid] = (1.0, 1.0)
+            cluster_calib[cid] = (1.0, 1.0, 1.0)
             cluster_history[cid] = []
             continue
         
         events = clusters[cid]
-        hstar, scale_ej, history = iterative_calibration(
+        peak_scale, tau_scale, scale_ej, history = iterative_calibration(
             cluster_id=cid,
             events=events,
             params=params,
             E_ref_dict=E_ref_dict,
             bands=bands,
-            h_min=args.h_min,
-            h_max=args.h_max,
-            h_step=args.h_step,
+            peak_min=args.peak_min,
+            peak_max=args.peak_max,
+            peak_step=args.peak_step,
+            tau_min=args.tau_min,
+            tau_max=args.tau_max,
+            tau_step=args.tau_step,
             **analyze_kwargs,
         )
-        cluster_calib[cid] = (hstar, scale_ej)
+        cluster_calib[cid] = (peak_scale, tau_scale, scale_ej)
         cluster_history[cid] = history
     
     # Save calibrations with history
@@ -544,18 +600,22 @@ def main():
         },
         "calibrations": {
             str(cid): {
-                "H_STAR": float(hstar),
+                "PEAK_SCALE": float(peak_scale),
+                "TAU_SCALE": float(tau_scale),
                 "SCALE_EJ": float(scale_ej),
-                "K": float(hstar * scale_ej),
+                "K": float(peak_scale * tau_scale * scale_ej),
                 "n_iterations": len(cluster_history.get(cid, [])),
                 "history": cluster_history.get(cid, []),
             }
-            for cid, (hstar, scale_ej) in cluster_calib.items()
+            for cid, (peak_scale, tau_scale, scale_ej) in cluster_calib.items()
         },
         "params": {
-            "h_min": args.h_min,
-            "h_max": args.h_max,
-            "h_step": args.h_step,
+            "peak_min": args.peak_min,
+            "peak_max": args.peak_max,
+            "peak_step": args.peak_step,
+            "tau_min": args.tau_min,
+            "tau_max": args.tau_max,
+            "tau_step": args.tau_step,
             "k_clusters": args.k,
         }
     }
@@ -569,18 +629,20 @@ def main():
     results = {}
     
     for event, cid in event_to_cluster.items():
-        hstar, scale_ej = cluster_calib[cid]
-        print(f"   {event} (cluster {cid}, H={hstar:.3e}, S={scale_ej:.3e})...", end=" ")
+        peak_scale, tau_scale, scale_ej = cluster_calib[cid]
+        print(f"   {event} (cluster {cid}, PEAK={peak_scale:.3e}, TAU={tau_scale:.3e}, S={scale_ej:.3e})...", end=" ")
         
         try:
             res = lsp.analyze_event(
                 event=event,
                 params=params,
                 bands=bands,
-                hstar_in=hstar,
+                peak_scale=peak_scale,
+                tau_scale=tau_scale,
                 scale_ej_in=scale_ej,
                 plot=False,
                 return_internals=False,
+                verbose=False,
                 **analyze_kwargs,
             )
             results[event] = res

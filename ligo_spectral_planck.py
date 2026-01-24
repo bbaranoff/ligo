@@ -3,14 +3,42 @@
 
 """Analyse spectrale coherente GWOSC (H1-L1, V1 optionnel)
 
+Lecture des données
+-------------------
+Le script lit les fichiers NPZ depuis le répertoire data/npz/:
+- {event}_H1.npz : données du détecteur Hanford
+- {event}_L1.npz : données du détecteur Livingston
+- {event}_V1.npz : données du détecteur Virgo (optionnel)
+
+Chaque fichier NPZ contient:
+- data: array de strain
+- fs: fréquence d'échantillonnage
+- t0, t1: temps GPS de début et fin
+
+Paramètres de calibration
+--------------------------
+Trois paramètres contrôlent la calibration des résultats :
+- TAU_SCALE (--tau-scale)    : facteur multiplicatif pour tau (défaut: 1.0)
+- SCALE_EJ (--scale-ej)       : facteur d'échelle d'énergie (défaut: 4.37e37)
+- PEAK_SCALE (--peak-scale)   : facteur multiplicatif pour amplitude des signaux (défaut: 1.0)
+
+Par défaut (sans arguments), ces valeurs donnent les résultats de référence.
+Pour utiliser des valeurs calibrées issues d'une analyse par clusters, 
+passez ces paramètres explicitement :
+
+  python ligo_spectral_planck.py --event GW150914 \\
+    --tau-scale 0.9 --scale-ej 1.9041e37 --peak-scale 1.0
+
 Sorties
+-------
 - dEdf_internal: spectre interne (avant SCALE_EJ)
 - E_total_J = SCALE_EJ * integral(dE/df)
 - m_sun = E_total_J / (M_sun*c^2)
 - tau_hl_s: delay H1-L1 estime par correlation sur une bande dediee (tau-band)
-- nu_eff_energy: barycentre energetique sur une bande dediee (nu-band), avec garde-fous
+- nu_eff_energy: barycentre energetique sur une bande dediee (nu-band)
 
 Calibration par moindres carrés
+--------------------------------
 - Minimise sum((y_obs - (H_STAR * SCALE_EJ * y_model))^2) sur tous les events
 - Deux modes:
   1. --calibrate-lsq : calcule H_STAR et SCALE_EJ optimaux
@@ -36,7 +64,6 @@ from scipy.integrate import trapezoid
 from scipy.optimize import minimize
 
 from gwosc import datasets
-from gwpy.timeseries import TimeSeries
 
 try:
     from numba import njit
@@ -53,10 +80,10 @@ c = 299792458.0
 M_sun = 1.98847e30
 Mpc = 3.085677581491367e22
 
-DEFAULT_HSTAR = 1.0
+DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
-NORM_EJ = 3.8e37
-
+DEFAULT_PEAK_SCALE = 1.0
+SCALE_EJ_NORM = 5.37e37
 # ------------------
 # NPZ local loading
 # ------------------
@@ -69,8 +96,15 @@ def get_npz_path(event: str, detector: str, npz_dir: str = "data/npz") -> str:
     return path
 
 
-def load_npz(path: str):
-    """Charge un fichier NPZ."""
+def load_npz(path: str) -> Tuple[np.ndarray, float, float, float]:
+    """Charge un fichier NPZ.
+    
+    Returns:
+        data: array de strain
+        fs: fréquence d'échantillonnage
+        t0: temps GPS de début
+        t1: temps GPS de fin
+    """
     z = np.load(path)
     return (
         np.asarray(z["data"], float),
@@ -80,13 +114,16 @@ def load_npz(path: str):
     )
 
 
-def crop_array(x, fs, t0_arr, t_start, t_end):
+def crop_array(x: np.ndarray, fs: float, t0_arr: float, t_start: float, t_end: float) -> np.ndarray:
     """Extrait un segment temporel d'un array."""
     i0 = int((t_start - t0_arr) * fs)
     i1 = int((t_end - t0_arr) * fs)
     return x[max(i0, 0):max(i1, 0)]
 
 
+# ------------------
+# IO params
+# ------------------
 def load_event_params(path: str) -> Dict[str, Any]:
     """Charge les paramètres des événements depuis un JSON."""
     with open(path, "r") as f:
@@ -122,7 +159,6 @@ def get_event_gps(event: str, params: Dict[str, Any]) -> float:
 # ------------------
 # Utils
 # ------------------
-
 def robust_peak(x: np.ndarray, q: float = 99.5) -> float:
     """Calcule un peak robuste via percentile."""
     x = np.asarray(x, float)
@@ -406,10 +442,12 @@ def analyze_event(
     npz_dir: str = "data/npz",
     peak_norm: bool = False,
     peak_quantile: float = 99.5,
-    hstar_in: float = DEFAULT_HSTAR,
+    tau_scale: float = DEFAULT_TAU_SCALE,
     scale_ej_in: float = DEFAULT_SCALE_EJ,
+    peak_scale: float = DEFAULT_PEAK_SCALE,
     plot: bool = False,
     return_internals: bool = False,
+    verbose: bool = False,
 ) -> Dict[str, Any]:
     """
     Analyse spectrale d'un événement gravitationnel.
@@ -426,10 +464,12 @@ def analyze_event(
         npz_dir: Répertoire contenant les fichiers NPZ
         peak_norm: Normaliser par le peak
         peak_quantile: Quantile pour le peak
-        hstar_in: Facteur H*
+        tau_scale: Facteur multiplicatif pour tau
         scale_ej_in: Facteur d'échelle d'énergie
+        peak_scale: Facteur multiplicatif pour amplitude des signaux
         plot: Générer des plots
         return_internals: Retourner les données internes (pour calibration)
+        verbose: Afficher les messages de debug
     """
     # -----------------------------
     # 0) Resolve per-event params
@@ -473,7 +513,8 @@ def analyze_event(
     # -----------------------------
     # 1) Load NPZ files
     # -----------------------------
-    print(f"\n📡 Chargement des données NPZ pour {event}...")
+    if verbose:
+        print(f"\n📡 Chargement des données NPZ pour {event}...")
 
     try:
         pH = get_npz_path(event, "H1", npz_dir)
@@ -502,9 +543,11 @@ def analyze_event(
                 raise RuntimeError("Sample rate mismatch V1")
 
             used.append("V1")
-            print(f"[INFO] Virgo (V1) chargé pour {event}")
+            if verbose:
+                print(f"[INFO] Virgo (V1) chargé pour {event}")
         except (FileNotFoundError, Exception) as e:
-            print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
+            if verbose:
+                print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
             hV = None
 
     # -----------------------------
@@ -545,7 +588,8 @@ def analyze_event(
     y_tau = safe_bandpass(seg_tau_L, fs, *bands.tau_band)
 
     tau_hl = -abs(estimate_delay_time(x_tau, y_tau, fs))
-    tau_hl_cal = float(hstar_in) * tau_hl
+    # Apply tau_scale to tau
+    tau_hl_s = float(tau_scale) * tau_hl
 
     # -----------------------------
     # 4) Signal segment
@@ -560,9 +604,13 @@ def analyze_event(
     else:
         hV_raw = None
 
+    # Apply peak_scale to raw segments
+    hH = hH_raw * float(peak_scale)
+    hL = hL_raw * float(peak_scale)
+
     # Bandpass for analysis band
-    hH_f = safe_bandpass(hH_raw, fs, flow, fhigh)
-    hL_f = safe_bandpass(hL_raw, fs, flow, fhigh)
+    hH_f = safe_bandpass(hH, fs, flow, fhigh)
+    hL_f = safe_bandpass(hL, fs, flow, fhigh)
 
     peak_ref = max(robust_peak(hH_f, peak_quantile), robust_peak(hL_f, peak_quantile))
     if peak_norm and peak_ref > 0:
@@ -588,13 +636,18 @@ def analyze_event(
 
     S1i = np.interp(f_use, f_psd_H, S1).astype(np.float64)
     S2i = np.interp(f_use, f_psd_L, S2).astype(np.float64)
+    
+    # PAS d'ajustement du PSD pour H_PEAK
+    # Le PSD est calculé sur le bruit (sans H_PEAK)
+    # Donc quand on blanchit (H_PEAK × signal) / sqrt(PSD_bruit),
+    # l'effet de H_PEAK est préservé dans l'énergie finale
 
     S1i = np.nan_to_num(S1i, nan=1e-44, posinf=1e-44, neginf=1e-44)
     S2i = np.nan_to_num(S2i, nan=1e-44, posinf=1e-44, neginf=1e-44)
     S1i = np.maximum(S1i, 1e-60)
     S2i = np.maximum(S2i, 1e-60)
 
-    phi = (2.0 * np.pi * f_use * tau_hl_cal).astype(np.float64)
+    phi = (2.0 * np.pi * f_use * tau_hl_s).astype(np.float64)
     r = float(distance_mpc) * Mpc
 
     # whitened coherent sum (H1 + H2 seulement, V1 ignoré pour simplifier)
@@ -629,10 +682,13 @@ def analyze_event(
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
 
     # -------------------------------------------------
-    # Énergie spectrale (base immuable)
+    # Énergie spectrale
     # -------------------------------------------------
-    E_internal = float(trapezoid(dEdf, f_use)) * NORM_EJ * scale_ej_in
-    energy_J = float(E_internal)
+    # E_internal = énergie brute (sans SCALE_EJ, pour calibration)
+    E_internal = float(trapezoid(dEdf, f_use))
+    E_internal *= SCALE_EJ_NORM
+    # energy_J = énergie calibrée (avec SCALE_EJ)
+    energy_J = E_internal * scale_ej_in
 
     # -------------------------------------------------
     # Bandwidths & nu_eff
@@ -671,6 +727,7 @@ def analyze_event(
     # LSQ / calibration mode (internals only)
     # -------------------------------------------------
     if return_internals:
+        # Segments bruts pour peak/power (sans H_PEAK car déjà dans FFT)
         hL_cal = safe_bandpass(hL_raw, fs, tb0, tb1)
         peak_raw = robust_peak(hL_cal, peak_quantile)
         pwr_raw = float(np.mean(hL_cal * hL_cal))
@@ -695,12 +752,13 @@ def analyze_event(
         "fhigh_Hz": float(fhigh),
         "tau_band_Hz": [float(tb0), float(tb1)],
         "nu_band_Hz": [float(nb0), float(nb1)],
-        "tau_hl_s": float(tau_hl_cal),
-        "H_STAR": float(hstar_in),
+        "tau_hl_s": float(tau_hl_s),
+        "TAU_SCALE": float(tau_scale),
         "SCALE_EJ": float(scale_ej_in),
+        "PEAK_SCALE": float(peak_scale),
         "E_internal": float(E_internal),
         "energy_J": float(energy_J),
-        "m_sun": float(m_sun_val),
+        "msun_c2": float(m_sun_val),
         "nu_eff": {
             "nu_eff_energy": float(nu_eff),
             "nu_eff_energy_raw": float(nu_eff_raw),
@@ -715,13 +773,37 @@ def analyze_event(
     with open(os.path.join("results", f"{event}.json"), "w") as f:
         json.dump(out, f, indent=2)
 
-    print(f"=== ANALYSE SPECTRALE {event} ===")
-    print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
-    print(f"nu_eff  = {nu_eff:.2f} Hz")
-    print(f"Tau (H1-L1): {tau_hl:.6e} s")
+    if verbose:
+        print(f"=== ANALYSE SPECTRALE {event} ===")
+        print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
+        print(f"nu_eff  = {nu_eff:.2f} Hz")
+        print(f"Tau (H1-L1): {tau_hl:.6e} s")
+
+    if plot:
+        import matplotlib.pyplot as plt
+        os.makedirs("plots", exist_ok=True)
+        plt.figure(figsize=(10, 6))
+        plt.loglog(f_use, np.maximum(dEdf, 1e-80), lw=1.4, label=f"{event}")
+
+        f_log = np.geomspace(max(f_use[0], 1e-6), f_use[-1], 500)
+        d_log = np.interp(f_log, f_use, np.maximum(dEdf, 1e-80))
+        log_smooth = gaussian_filter1d(np.log10(d_log), sigma=2)
+        plt.loglog(f_log, 10 ** log_smooth, "--", lw=1.2, alpha=0.8, label="smoothed")
+
+        if nu_eff > 0:
+            plt.axvline(x=nu_eff, linestyle=":", lw=1.0, label=f"nu_eff={nu_eff:.1f} Hz")
+
+        plt.xlabel("Frequence (Hz)")
+        plt.ylabel("dE/df (interne)")
+        plt.title(f"Spectre coherent H1-L1 - {event}")
+        plt.grid(True, which="both", alpha=0.25, linestyle="--")
+        plt.legend()
+        out_plot = os.path.join("plots", f"{event}_spectre.png")
+        plt.savefig(out_plot, dpi=200, bbox_inches="tight")
+        plt.close()
+        print("[plot]", out_plot)
 
     return out
-
 
 
 def calibrate_least_squares(
@@ -732,18 +814,18 @@ def calibrate_least_squares(
     **analyze_kwargs
 ) -> Tuple[float, float]:
     """
-    Calibre H_STAR et SCALE_EJ par moindres carrés.
+    Calibre TAU_SCALE et SCALE_EJ par moindres carrés.
     
-    Minimise: sum((y_obs[i] - H_STAR * SCALE_EJ * y_model[i])^2)
+    Minimise: sum((y_obs[i] - TAU_SCALE * SCALE_EJ * y_model[i])^2)
     
-    où y_model[i] est l'énergie interne pour l'event i avec H_STAR=1, SCALE_EJ=1
+    où y_model[i] est l'énergie interne pour l'event i avec TAU_SCALE=1, SCALE_EJ=1
     et y_obs[i] est l'énergie observée (en M_sun) depuis une référence externe.
     """
     
     print("\n🔧 Calibration par moindres carrés...")
     print(f"Événements: {len(events)}")
     
-    # Étape 1: Collecter les y_model (energy_J avec H_STAR=1, SCALE_EJ=1)
+    # Étape 1: Collecter les y_model (E_internal avec TAU_SCALE=1, SCALE_EJ=1)
     data = []
     for ev in events:
         if ev not in y_obs_dict:
@@ -757,10 +839,13 @@ def calibrate_least_squares(
                 event=ev,
                 params=params,
                 bands=bands,
-                hstar_in=1.0,
+                tau_scale=1.0,
                 scale_ej_in=1.0,
+                peak_scale=1.0,
+                peak_norm=False,
                 plot=False,
                 return_internals=True,
+                verbose=False,
                 **analyze_kwargs,
             )
         except Exception as e:
@@ -771,11 +856,11 @@ def calibrate_least_squares(
             print(f"[WARN] skip {ev}: analyze_event failed (gps={g}): {e}")
             continue
 
-        y_model = float(intern.get("energy_J", 0.0))
+        y_model = float(intern.get("E_internal", 0.0))
         peak_raw = float(intern.get("peak_raw", 0.0))
 
         if (not np.isfinite(y_model)) or y_model <= 0.0:
-            print(f"[WARN] skip {ev}: energy_J invalid ({y_model})")
+            print(f"[WARN] skip {ev}: E_internal invalid ({y_model})")
             continue
 
         data.append((ev, yobs, y_model, peak_raw))
@@ -786,17 +871,17 @@ def calibrate_least_squares(
     # Vecteurs
     evs = [t[0] for t in data]
     y_obs = np.array([t[1] for t in data], dtype=float)   # "vérité" (ex: M_sun ou J selon ton dict)
-    y_mod = np.array([t[2] for t in data], dtype=float)   # energy_J (H_STAR=1, SCALE_EJ=1)
+    y_mod = np.array([t[2] for t in data], dtype=float)   # E_internal (TAU_SCALE=1, SCALE_EJ=1)
     p_raw = np.array([t[3] for t in data], dtype=float)   # peak_raw (utile si tu veux lever la dégénérescence)
 
     # --------------------------------------------
     # IMPORTANT (math):
-    # Si ton modèle est: y_pred = (H_STAR * SCALE_EJ) * y_model
-    # alors seul le produit K = H_STAR*SCALE_EJ est identifiable par LSQ sur y_obs.
+    # Si ton modèle est: y_pred = (TAU_SCALE * SCALE_EJ) * y_model
+    # alors seul le produit K = TAU_SCALE*SCALE_EJ est identifiable par LSQ sur y_obs.
     #
-    # -> Option A (par défaut): on fit K en closed-form, puis on fixe H_STAR=1 et SCALE_EJ=K.
+    # -> Option A (par défaut): on fit K en closed-form, puis on fixe TAU_SCALE=1 et SCALE_EJ=K.
     # -> Option B (si tu passes peak_target dans analyze_kwargs): on ajoute une contrainte d'amplitude
-    #    sur peak_raw pour estimer H_STAR et SCALE_EJ séparément.
+    #    sur peak_raw pour estimer TAU_SCALE et SCALE_EJ séparément.
     # --------------------------------------------
 
     peak_target = analyze_kwargs.get("peak_target", None)  # optionnel
@@ -809,7 +894,7 @@ def calibrate_least_squares(
             raise RuntimeError("[FATAL] LSQ degenerate (dot products invalid)")
 
         K = num / den
-        hstar = 1.0
+        tau_scale = 1.0
         scale_ej = float(K)
 
         # petits diagnostics
@@ -818,20 +903,20 @@ def calibrate_least_squares(
         mae = float(np.mean(np.abs(rel)))
         med = float(np.median(np.abs(rel)))
 
-        print("\n=== LSQ (degenerate) : fit K = H_STAR*SCALE_EJ ===")
+        print("\n=== LSQ (degenerate) : fit K = TAU_SCALE*SCALE_EJ ===")
         print(f"events_used = {len(evs)}")
         print(f"K_hat       = {K:.6e}")
-        print(f"-> choose H_STAR=1 ; SCALE_EJ=K")
+        print(f"-> choose TAU_SCALE=1 ; SCALE_EJ=K")
         print(f"rel_MAE     = {100*mae:.2f}%")
         print(f"rel_MED     = {100*med:.2f}%")
 
-        return float(hstar), float(scale_ej)
+        return float(tau_scale), float(scale_ej)
 
-    # === Option B : fit (H_STAR, SCALE_EJ) avec contrainte peak ===
-    # On force: H_STAR * peak_raw ≈ peak_target  (linéaire en H_STAR)
-    # et:      (H_STAR * SCALE_EJ) * y_mod ≈ y_obs
+    # === Option B : fit (TAU_SCALE, SCALE_EJ) avec contrainte peak ===
+    # On force: TAU_SCALE * peak_raw ≈ peak_target  (linéaire en TAU_SCALE)
+    # et:      (TAU_SCALE * SCALE_EJ) * y_mod ≈ y_obs
     #
-    # Loss = ||y_obs - (H*S)*y_mod||^2 / ||y_obs||^2  +  λ * ||peak_target - H*peak_raw||^2 / ||peak_target||^2
+    # Loss = ||y_obs - (T*S)*y_mod||^2 / ||y_obs||^2  +  λ * ||peak_target - T*peak_raw||^2 / ||peak_target||^2
     # λ règle le poids de la contrainte amplitude.
     lam = float(analyze_kwargs.get("peak_lambda", 1.0))
 
@@ -840,19 +925,19 @@ def calibrate_least_squares(
     p_norm = float((peak_target ** 2) * len(p_raw)) + 1e-30
 
     def loss_logparams(x: np.ndarray) -> float:
-        # x = [logH, logS] pour garantir positivité
-        logH, logS = float(x[0]), float(x[1])
-        H = math.exp(logH)
+        # x = [logT, logS] pour garantir positivité
+        logT, logS = float(x[0]), float(x[1])
+        T = math.exp(logT)
         S = math.exp(logS)
 
-        y_pred = (H * S) * y_mod
+        y_pred = (T * S) * y_mod
         e_y = y_obs - y_pred
         L_y = float(np.dot(e_y, e_y)) / y_norm
 
         # contrainte amplitude (ignore p_raw<=0)
         m = (p_raw > 0) & np.isfinite(p_raw)
         if np.any(m):
-            p_pred = H * p_raw[m]
+            p_pred = T * p_raw[m]
             e_p = (peak_target - p_pred)
             L_p = float(np.dot(e_p, e_p)) / p_norm
         else:
@@ -860,42 +945,43 @@ def calibrate_least_squares(
 
         return L_y + lam * L_p
 
-    # init raisonnable: H depuis peak, S depuis K
-    # H0 = peak_target / median(peak_raw) ; S0 = K/H0
+    # init raisonnable: T depuis peak, S depuis K
+    # T0 = peak_target / median(peak_raw) ; S0 = K/T0
     p_med = float(np.median(p_raw[p_raw > 0])) if np.any(p_raw > 0) else 1.0
-    H0 = float(peak_target) / max(p_med, 1e-30)
+    T0 = float(peak_target) / max(p_med, 1e-30)
 
     num = float(np.dot(y_obs, y_mod))
     den = float(np.dot(y_mod, y_mod)) + 1e-30
     K0 = num / den
 
-    S0 = float(K0) / max(H0, 1e-30)
+    S0 = float(K0) / max(T0, 1e-30)
 
-    x0 = np.array([math.log(max(H0, 1e-30)), math.log(max(S0, 1e-30))], dtype=float)
+    x0 = np.array([math.log(max(T0, 1e-30)), math.log(max(S0, 1e-30))], dtype=float)
 
     res = minimize(loss_logparams, x0=x0, method="Nelder-Mead", options={"maxiter": 5000})
 
-    logH, logS = float(res.x[0]), float(res.x[1])
-    hstar = math.exp(logH)
+    logT, logS = float(res.x[0]), float(res.x[1])
+    tau_scale = math.exp(logT)
     scale_ej = math.exp(logS)
 
     # diagnostics
-    y_pred = (hstar * scale_ej) * y_mod
+    y_pred = (tau_scale * scale_ej) * y_mod
     rel = (y_pred - y_obs) / np.maximum(np.abs(y_obs), 1e-30)
     mae = float(np.mean(np.abs(rel)))
     med = float(np.median(np.abs(rel)))
 
-    print("\n=== LSQ (non-degenerate) : fit H_STAR & SCALE_EJ (avec peak_target) ===")
+    print("\n=== LSQ (non-degenerate) : fit TAU_SCALE & SCALE_EJ (avec peak_target) ===")
     print(f"events_used = {len(evs)}")
     print(f"peak_target = {peak_target:.6e}  lambda={lam}")
-    print(f"H_STAR      = {hstar:.6e}")
+    print(f"TAU_SCALE   = {tau_scale:.6e}")
     print(f"SCALE_EJ    = {scale_ej:.6e}")
-    print(f"K=H*S       = {(hstar*scale_ej):.6e}")
+    print(f"K=T*S       = {(tau_scale*scale_ej):.6e}")
     print(f"rel_MAE     = {100*mae:.2f}%")
     print(f"rel_MED     = {100*med:.2f}%")
     print(f"opt_status  = {res.success}  it={res.nit}  f={res.fun:.3e}")
 
-    return float(hstar), float(scale_ej)
+    return float(tau_scale), float(scale_ej)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Analyse spectrale coherente GWOSC (H1-L1, V1 optionnel)")
@@ -915,8 +1001,12 @@ def main() -> None:
     ap.add_argument("--tau-band", type=float, nargs=2, default=[35.0, 250.0], metavar=("F1", "F2"))
     ap.add_argument("--nu-band", type=float, nargs=2, default=[30.0, 350.0], metavar=("F1", "F2"))
 
-    ap.add_argument("--hstar", type=float, default=DEFAULT_HSTAR)
-    ap.add_argument("--scale-ej", type=float, default=DEFAULT_SCALE_EJ)
+    ap.add_argument("--tau-scale", type=float, default=DEFAULT_TAU_SCALE, 
+                    help=f"Facteur multiplicatif pour tau (défaut: {DEFAULT_TAU_SCALE})")
+    ap.add_argument("--scale-ej", type=float, default=DEFAULT_SCALE_EJ,
+                    help=f"Facteur d'échelle d'énergie (défaut: {DEFAULT_SCALE_EJ})")
+    ap.add_argument("--peak-scale", type=float, default=DEFAULT_PEAK_SCALE,
+                    help=f"Facteur multiplicatif pour amplitude des signaux (défaut: {DEFAULT_PEAK_SCALE})")
     ap.add_argument("--peak-norm", action="store_true", help="Normalise par peak_ref (debug)")
     ap.add_argument("--peak-quantile", type=float, default=99.5)
     ap.add_argument("--refs", type=str, default=None, help="JSON refs LIGO (ligo_refs.json)")
@@ -929,6 +1019,7 @@ def main() -> None:
     ap.add_argument("--peak-lambda", type=float, default=1.0, help="Poids contrainte peak (optionnel)")
 
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--verbose", "-v", action="store_true", help="Afficher les messages de debug")
 
     args = ap.parse_args()
 
@@ -940,12 +1031,11 @@ def main() -> None:
     # 1) use-calibrated
     if args.use_calibrated:
         cal = _load_json(args.use_calibrated)
-        args.hstar = float(cal["H_STAR"])
-        args.scale_ej = float(cal["SCALE_EJ"])
+        args.tau_scale = float(cal.get("TAU_SCALE", cal.get("H_STAR", DEFAULT_TAU_SCALE)))
+        args.scale_ej = float(cal.get("SCALE_EJ", DEFAULT_SCALE_EJ))
+        args.peak_scale = float(cal.get("PEAK_SCALE", cal.get("H_PEAK", DEFAULT_PEAK_SCALE)))
 
     # 2) calibrate-lsq
-    # --- dans main(), branche --calibrate-lsq ---
-
     refs = {}
     if args.refs:
         with open(args.refs, "r") as f:
@@ -991,7 +1081,7 @@ def main() -> None:
         # calibration ONLY
         if not args.refs:
             raise RuntimeError("[FATAL] --calibrate-lsq nécessite --refs")
-        hstar, scale = calibrate_least_squares(
+        tau_scale, scale = calibrate_least_squares(
             events=events,
             params=params,
             y_obs_dict=y_obs_dict,
@@ -1000,22 +1090,24 @@ def main() -> None:
             fhigh=args.fhigh,
             signal_win=args.signal_win,
             noise_pad=args.noise_pad,
-            distance_mpc=None,  # distance lue dans params dans analyze_event si tu as ajouté le garde-fou
+            distance_mpc=None,
             use_virgo=not args.no_virgo,
             peak_quantile=args.peak_quantile,
         )
-        # éventuellement écrire args.cal_out ici
     elif do_use_cal:
-        # use calibrated constants from args.cal_in
-        # hstar, scale = load...
-        pass
+        tau_scale, scale = args.tau_scale, args.scale_ej
     else:
         # NO calibration: analyze events with defaults or provided constants
-        hstar, scale = args.hstar, args.scale_ej
+        tau_scale, scale = args.tau_scale, args.scale_ej
+    
     if do_cal or do_use_cal:
-        print(f"[cal] H_STAR={hstar:.6e} SCALE_EJ={scale:.6e}")
+        print(f"[cal] TAU_SCALE={tau_scale:.6e} SCALE_EJ={scale:.6e}")
         with open(args.cal_out, "w") as f:
-            json.dump({"H_STAR": float(hstar), "SCALE_EJ": float(scale)}, f, indent=2)
+            json.dump({
+                "TAU_SCALE": float(tau_scale), 
+                "SCALE_EJ": float(scale), 
+                "PEAK_SCALE": float(args.peak_scale)
+            }, f, indent=2)
         print(f"[cal] wrote {args.cal_out}")
         return
 
@@ -1059,13 +1151,14 @@ def main() -> None:
         use_virgo=not args.no_virgo,
         peak_norm=bool(args.peak_norm),
         peak_quantile=float(args.peak_quantile),
-        hstar_in=float(args.hstar),
+        tau_scale=float(args.tau_scale),
         scale_ej_in=float(args.scale_ej),
+        peak_scale=float(args.peak_scale),
         plot=bool(args.plot),
         return_internals=False,
+        verbose=bool(args.verbose),
     )
 
 
 if __name__ == "__main__":
     main()
-
