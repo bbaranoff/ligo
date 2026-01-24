@@ -17,6 +17,10 @@ il sépare **estimation** et **ignorance mesurée**.
 Le workflow complet est le suivant :
 
 ```bash
+# 0. Clone git and checkout
+git clone https://github.com/bbaranoff/ligo/
+git checkout e3653046dc36ac2652797791902e2f9d242857d3
+
 # 1. Préparation de l’environnement
 source go.sh
 python write_events.py
