@@ -14,10 +14,8 @@ EVENTS=(
   GW150914
   GW151226
   GW170104
-  GW170608
   GW170809
   GW170814
-  GW170818
   GW170823
   GW190403_051519
   GW190408_181802
@@ -25,7 +23,10 @@ EVENTS=(
   GW190413_052954
   GW190413_134308
   GW190421_213856
+  GW190426_190642
   GW190503_185404
+  GW190512_180714
+  GW190513_205428
   GW190514_065416
   GW190517_055101
   GW190519_153544
@@ -36,14 +37,43 @@ EVENTS=(
   GW190701_203306
   GW190706_222641
   GW190707_093326
+  GW190719_215514
   GW190720_000836
   GW190727_060333
   GW190728_064510
   GW190731_140936
   GW190803_022701
-  GW190814
+  GW190805_211137
   GW190828_063405
   GW190828_065509
+  GW190910_112807
+  GW190915_235702
+  GW190916_200658
+  GW190924_021846
+  GW190929_012149
+  GW190930_133541
+  GW191109_010717
+  GW191126_115259
+  GW191127_050227
+  GW191129_134029
+  GW191204_171526
+  GW191215_223052
+  GW191222_033537
+  GW191230_180458
+  GW200128_022011
+  GW200129_065458
+  GW200202_154313
+  GW200208_222617
+  GW200219_094415
+  GW200220_061928
+  GW200220_124850
+  GW200224_222234
+  GW200225_060421
+  GW200306_093714
+  GW200308_173609
+  GW200311_115853
+  GW200316_215756
+  GW200322_091133
 )
 
 for ev in "${EVENTS[@]}"; do
@@ -54,82 +84,9 @@ for ev in "${EVENTS[@]}"; do
     --event "$ev" \
     --event-params "$EVENT_PARAMS" \
     --refs "$REFS" \
-    --ref-key msun_c2 \
-    --flow 30 \
-    --fhigh 500 \
-    --signal-win 0.6 \
-    --noise-pad 800 \
-    --peak-quantile 0.9
+    --ref-key energy_J \
+    --peak-quantile 0.95 --verbose
 
 
 done
-echo
-echo "============================================================"
-echo "📊 STATS GLOBALES — RESULTS/"
-echo "============================================================"
-
-N_TOTAL=$(ls results/*.json 2>/dev/null | wc -l)
-echo "Nombre de fichiers résultats : $N_TOTAL"
-
-if [ "$N_TOTAL" -eq 0 ]; then
-  echo "⚠️ Aucun résultat trouvé"
-  exit 0
-fi
-
-# Moyennes / médianes avec jq + awk
-jq -r '
-  select(.msun_c2 != null) |
-  [.event, .tau, .nu_eff, .msun_c2] | @tsv
-' results/*.json > /tmp/results_stats.tsv
-
-N_VALID=$(wc -l < /tmp/results_stats.tsv)
-echo "Résultats exploitables      : $N_VALID"
-
-# Masse
-echo
-echo "M☉c² (masse radiée)"
-awk '{print $4}' /tmp/results_stats.tsv | sort -n > /tmp/msun.txt
-awk '
-  {a[NR]=$1}
-  END {
-    print "  min     :", a[1]
-    print "  median  :", a[int((NR+1)/2)]
-    print "  max     :", a[NR]
-  }
-' /tmp/msun.txt
-
-# Tau
-echo
-echo "τ (délai inter-détecteurs)"
-awk '{print $2}' /tmp/results_stats.tsv | sort -n > /tmp/tau.txt
-awk '
-  {a[NR]=$1}
-  END {
-    print "  min     :", a[1]
-    print "  median  :", a[int((NR+1)/2)]
-    print "  max     :", a[NR]
-  }
-' /tmp/tau.txt
-
-# Nu_eff
-echo
-echo "ν_eff (Hz)"
-awk '{print $3}' /tmp/results_stats.tsv | sort -n > /tmp/nu.txt
-awk '
-  {a[NR]=$1}
-  END {
-    print "  min     :", a[1]
-    print "  median  :", a[int((NR+1)/2)]
-    print "  max     :", a[NR]
-  }
-' /tmp/nu.txt
-
-# Détection valeurs aberrantes simples
-echo
-echo "⚠️ ÉVÉNEMENTS POTENTIELLEMENT PROBLÉMATIQUES"
-awk '$4 < 0.5 || $4 > 10.0 {print "  ", $1, "(M☉c² =", $4 ")"}' /tmp/results_stats.tsv || true
-
-echo
-echo "============================================================"
-echo " Fin des stats results/"
-echo "============================================================"
+echo "results written in results/"

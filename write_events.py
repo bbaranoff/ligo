@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
 Script pour récupérer les paramètres d'événements LIGO depuis GWOSC API
-et générer event_params.json et ligo_refs.json avec tous les détails nécessaires
+et générer event_params.json et ligo_refs.json avec paramètres adaptatifs
+
+NOUVEAU : Génère automatiquement des paramètres optimisés par masse
+- ULTRA_LIGHT (ΔM < 1.0 M☉) : signal_win=3.0s, flow=15Hz
+- LIGHT (1.0-1.5 M☉)        : signal_win=2.0s, flow=18Hz  
+- MEDIUM (1.5-4.0 M☉)       : signal_win=1.2s, flow=20Hz (standard)
+- MASSIVE (ΔM ≥ 4.0 M☉)     : signal_win=0.6s, flow=25Hz, fhigh=500Hz
 """
 
 import requests
@@ -21,6 +27,42 @@ DEFAULT_PARAMS = {
     "nu_band": [20.0, 500.0],
     "signal_win": 1.2,
     "noise_pad": 1200.0
+}
+
+# --- Paramètres adaptatifs par catégorie de masse ---
+ADAPTIVE_PARAMS = {
+    "ULTRA_LIGHT": {  # ΔM < 1.0 M☉
+        "flow": 15.0,
+        "fhigh": 400.0,
+        "tau_band": [20.0, 400.0],
+        "nu_band": [15.0, 450.0],
+        "signal_win": 3.0,      # Signal très long
+        "noise_pad": 600.0      # PSD proche
+    },
+    "LIGHT": {  # 1.0 ≤ ΔM < 1.5 M☉
+        "flow": 18.0,
+        "fhigh": 380.0,
+        "tau_band": [25.0, 380.0],
+        "nu_band": [18.0, 450.0],
+        "signal_win": 2.0,
+        "noise_pad": 800.0
+    },
+    "MEDIUM": {  # 1.5 ≤ ΔM < 4.0 M☉
+        "flow": 20.0,
+        "fhigh": 350.0,
+        "tau_band": [30.0, 350.0],
+        "nu_band": [20.0, 500.0],
+        "signal_win": 1.2,
+        "noise_pad": 1200.0
+    },
+    "MASSIVE": {  # ΔM ≥ 4.0 M☉
+        "flow": 25.0,
+        "fhigh": 500.0,
+        "tau_band": [40.0, 500.0],
+        "nu_band": [30.0, 600.0],
+        "signal_win": 0.6,      # Signal court
+        "noise_pad": 1500.0     # PSD loin
+    }
 }
 
 EVENTS = [
@@ -57,6 +99,18 @@ CATALOG_DOIS = {
 }
 
 
+def get_adaptive_category(delta_m):
+    """Détermine la catégorie adaptative basée sur la masse rayonnée."""
+    if delta_m < 1.0:
+        return "ULTRA_LIGHT"
+    elif delta_m < 1.5:
+        return "LIGHT"
+    elif delta_m < 4.0:
+        return "MEDIUM"
+    else:
+        return "MASSIVE"
+
+
 def fetch_event_json(event):
     """Récupère le JSON d'un événement depuis GWOSC API."""
     for rel in RELEASES:
@@ -84,17 +138,19 @@ def fetch_event_json(event):
 def main():
     print("="*70)
     print("RÉCUPÉRATION DES PARAMÈTRES D'ÉVÉNEMENTS DEPUIS GWOSC")
+    print("AVEC ADAPTATION AUTOMATIQUE PAR MASSE")
     print("="*70)
     
     event_params = {
         "_meta": {
-            "description": "GWOSC event parameters for the spectral-tau pipeline (GPS, distance, and per-event analysis knobs). Distances are point estimates from GWOSC tables; use PE posteriors for rigorous uncertainty.",
+            "description": "GWOSC event parameters for the spectral-tau pipeline with adaptive parameters based on radiated mass. Categories: ULTRA_LIGHT (<1.0 M☉), LIGHT (1.0-1.5 M☉), MEDIUM (1.5-4.0 M☉), MASSIVE (≥4.0 M☉).",
             "sources": {
                 "gwtc21_table": "https://gwosc.org/eventapi/html/GWTC-2.1-confident/?pagesize=all",
                 "query_lastver_page5": "https://gwosc.org/eventapi/html/query/show?lastver=true&page=5&pagesize=50&release=GWTC-1-confident%2CGWTC-2.1-confident%2CGWTC-3-confident%2CGWTC-4.0",
                 "gwtc1_paper_doi": "https://doi.org/10.1103/PhysRevX.9.031040",
                 "gwtc2_paper_doi": "https://doi.org/10.1103/PhysRevX.11.021053"
-            }
+            },
+            "adaptive_categories": ADAPTIVE_PARAMS
         },
         "default": DEFAULT_PARAMS.copy()
     }
@@ -103,6 +159,10 @@ def main():
     
     success_count = 0
     fail_count = 0
+    
+    # Stats par catégorie
+    category_counts = {cat: 0 for cat in ADAPTIVE_PARAMS.keys()}
+    category_counts["DEFAULT"] = 0  # Pour événements sans masse
 
     for ev in EVENTS:
         print(f"\n[INFO] Récupération de {ev}...")
@@ -122,7 +182,20 @@ def main():
         _, evdata = next(iter(data["events"].items()))
 
         # ----------------------------------------------------
-        # event_params.json (paramètres complets)
+        # Calcul des masses pour déterminer la catégorie
+        # ----------------------------------------------------
+        m_tot = evdata.get("total_mass_source")
+        m_fin = evdata.get("final_mass_source")
+        
+        delta_m = None
+        category = "DEFAULT"
+        
+        if m_tot is not None and m_fin is not None:
+            delta_m = max(m_tot - m_fin, 0.0)
+            category = get_adaptive_category(delta_m)
+        
+        # ----------------------------------------------------
+        # event_params.json (paramètres adaptatifs)
         # ----------------------------------------------------
         gps = evdata.get("GPS")
         dist = evdata.get("luminosity_distance")
@@ -133,14 +206,22 @@ def main():
             time.sleep(0.8)
             continue
 
-        # Créer l'entrée avec tous les paramètres
+        # Créer l'entrée avec GPS et distance
         event_entry = {
             "gps": gps,
             "distance_mpc": round(dist) if dist is not None else None,
         }
         
-        # Ajouter les paramètres d'analyse par défaut
-        event_entry.update(DEFAULT_PARAMS.copy())
+        # Ajouter les paramètres adaptatifs selon la catégorie
+        if category in ADAPTIVE_PARAMS:
+            event_entry.update(ADAPTIVE_PARAMS[category].copy())
+            category_counts[category] += 1
+        else:
+            event_entry.update(DEFAULT_PARAMS.copy())
+            category_counts["DEFAULT"] += 1
+        
+        # Ajouter la catégorie pour diagnostic
+        event_entry["_adaptive_category"] = category
         
         # Ajouter les sources
         event_entry["sources"] = {
@@ -155,35 +236,29 @@ def main():
         # ----------------------------------------------------
         # ligo_refs.json (énergies de référence)
         # ----------------------------------------------------
-        m_tot = evdata.get("total_mass_source")
-        m_fin = evdata.get("final_mass_source")
+        if delta_m is not None:
+            energy_J = delta_m * M_SUN * C**2
 
-        if m_tot is None or m_fin is None:
-            print(f"[WARN] Masses manquantes pour {ev}")
-            # On continue quand même pour event_params
+            # Classification
+            cls = "BBH"
+            if m_tot < 6:
+                cls = "BNS"
+            elif m_tot < 10:
+                cls = "NSBH"
+
+            ligo_refs[ev] = {
+                "msun_c2": round(delta_m, 6),
+                "energy_J": energy_J,
+                "cls": cls,
+                "source": f"GWOSC EventAPI ({release}/{version})"
+            }
+            
             success_count += 1
-            time.sleep(0.8)
-            continue
-
-        delta_m = max(m_tot - m_fin, 0.0)
-        energy_J = delta_m * M_SUN * C**2
-
-        # Classification
-        cls = "BBH"
-        if m_tot < 6:
-            cls = "BNS"
-        elif m_tot < 10:
-            cls = "NSBH"
-
-        ligo_refs[ev] = {
-            "msun_c2": round(delta_m, 6),
-            "energy_J": energy_J,
-            "cls": cls,
-            "source": f"GWOSC EventAPI ({release}/{version})"
-        }
-
-        success_count += 1
-        print(f"[OK] {ev}: GPS={gps}, dist={dist} Mpc, ΔM={delta_m:.4f} M☉")
+            print(f"[OK] {ev}: GPS={gps}, dist={dist} Mpc, ΔM={delta_m:.4f} M☉ → {category}")
+        else:
+            print(f"[WARN] Masses manquantes pour {ev}, utilise paramètres par défaut")
+            success_count += 1
+        
         time.sleep(0.8)
 
     # Sauvegarder les fichiers
@@ -199,6 +274,16 @@ def main():
         json.dump(ligo_refs, f, indent=2)
     print(f"✅ ligo_refs.json: {len(ligo_refs)} événements")
     
+    # Stats par catégorie
+    print("\n" + "="*70)
+    print("DISTRIBUTION PAR CATÉGORIE ADAPTATIVE")
+    print("="*70)
+    for cat in ["ULTRA_LIGHT", "LIGHT", "MEDIUM", "MASSIVE", "DEFAULT"]:
+        count = category_counts.get(cat, 0)
+        if count > 0:
+            emoji = {"ULTRA_LIGHT": "🔴", "LIGHT": "🟠", "MEDIUM": "🟢", "MASSIVE": "🔵", "DEFAULT": "⚪"}
+            print(f"{emoji[cat]} {cat:15} : {count:3} événements")
+    
     print("\n" + "="*70)
     print("RÉSUMÉ")
     print("="*70)
@@ -206,6 +291,28 @@ def main():
     print(f"Succès                   : {success_count}")
     print(f"Échecs                   : {fail_count}")
     print("="*70)
+    
+    # Afficher quelques exemples
+    print("\n" + "="*70)
+    print("EXEMPLES DE PARAMÈTRES ADAPTATIFS")
+    print("="*70)
+    
+    examples = {
+        "GW190924_021846": "ULTRA_LIGHT",
+        "GW151226": "LIGHT", 
+        "GW150914": "MEDIUM",
+        "GW190426_190642": "MASSIVE"
+    }
+    
+    for event, expected_cat in examples.items():
+        if event in event_params:
+            params = event_params[event]
+            cat = params.get("_adaptive_category", "?")
+            print(f"\n{event} ({cat}):")
+            print(f"  signal_win = {params['signal_win']:.1f} s")
+            print(f"  noise_pad  = {params['noise_pad']:.0f} s")
+            print(f"  flow       = {params['flow']:.0f} Hz")
+            print(f"  fhigh      = {params['fhigh']:.0f} Hz")
 
 
 if __name__ == "__main__":

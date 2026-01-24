@@ -432,13 +432,13 @@ class Bands:
 def analyze_event(
     event: str,
     params: Dict[str, Any],
-    flow: float,
-    fhigh: float,
-    signal_win: float,
-    noise_pad: float,
-    distance_mpc: float,
-    bands: Bands,
-    use_virgo: bool,
+    flow: Optional[float] = None,
+    fhigh: Optional[float] = None,
+    signal_win: Optional[float] = None,
+    noise_pad: Optional[float] = None,
+    distance_mpc: Optional[float] = None,
+    bands: Optional[Bands] = None,
+    use_virgo: bool = True,
     npz_dir: str = "data/npz",
     peak_norm: bool = False,
     peak_quantile: float = 99.5,
@@ -472,9 +472,11 @@ def analyze_event(
         verbose: Afficher les messages de debug
     """
     # -----------------------------
-    # 0) Resolve per-event params
+    # 0) Resolve per-event params with full fallback chain
     # -----------------------------
+    # Get event-specific params, fallback to "default" section
     evp = params.get(event, {}) if isinstance(params.get(event), dict) else {}
+    defaults = params.get("default", {}) if isinstance(params.get("default"), dict) else {}
 
     # GPS is mandatory
     gps = None
@@ -484,31 +486,50 @@ def analyze_event(
             break
     if gps is None:
         # best effort fallback to GWOSC catalog
-        gps = float(datasets.event_gps(event))
+        try:
+            gps = float(datasets.event_gps(event))
+        except Exception:
+            raise RuntimeError(f"[FATAL] GPS time missing for {event}")
 
-    # distance: allow None/0 passed in, then recover from params
+    # Distance with comprehensive fallback
     if distance_mpc is None or (isinstance(distance_mpc, (int, float)) and float(distance_mpc) <= 0.0):
-        for k in ("distance_mpc", "distance_Mpc", "luminosity_distance_mpc"):
-            if k in evp and evp[k] is not None:
+        for k in ("distance_mpc", "distance_Mpc", "luminosity_distance", "luminosity_distance_mpc"):
+            if k in evp and evp[k] is not None and float(evp[k]) > 0:
                 distance_mpc = float(evp[k])
                 break
     if distance_mpc is None or float(distance_mpc) <= 0.0:
         raise RuntimeError(f"[FATAL] distance_mpc missing/invalid for {event}")
 
-    # knobs defaults (if caller passed None)
+    # Analysis parameters: explicit arg → event params → default params → hardcoded
     if flow is None:
-        flow = float(evp.get("flow", 20.0))
+        flow = evp.get("flow") or defaults.get("flow") or 20.0
     if fhigh is None:
-        fhigh = float(evp.get("fhigh", 512.0))
+        fhigh = evp.get("fhigh") or defaults.get("fhigh") or 350.0
     if signal_win is None:
-        signal_win = float(evp.get("signal_win", 0.2))
+        signal_win = evp.get("signal_win") or defaults.get("signal_win") or 1.2
     if noise_pad is None:
-        noise_pad = float(evp.get("noise_pad", 50.0))
+        noise_pad = evp.get("noise_pad") or defaults.get("noise_pad") or 1200.0
 
     flow = float(flow)
     fhigh = float(fhigh)
     signal_win = float(signal_win)
     noise_pad = float(noise_pad)
+    
+    # Load tau_band and nu_band from event params if not provided
+    if bands is None:
+        tau_band_param = evp.get("tau_band") or defaults.get("tau_band") or [35.0, 250.0]
+        nu_band_param = evp.get("nu_band") or defaults.get("nu_band") or [30.0, 350.0]
+        bands = Bands(
+            tau_band=tuple(tau_band_param) if isinstance(tau_band_param, list) else tau_band_param,
+            nu_band=tuple(nu_band_param) if isinstance(nu_band_param, list) else nu_band_param
+        )
+    
+    if verbose:
+        print(f"\n⚙️  Paramètres adaptatifs pour {event}:")
+        print(f"   flow={flow:.1f} Hz, fhigh={fhigh:.1f} Hz")
+        print(f"   signal_win={signal_win:.2f} s, noise_pad={noise_pad:.1f} s")
+        print(f"   tau_band={bands.tau_band}, nu_band={bands.nu_band}")
+        print(f"   distance={distance_mpc:.0f} Mpc")
 
     # -----------------------------
     # 1) Load NPZ files

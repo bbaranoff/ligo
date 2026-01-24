@@ -142,16 +142,18 @@ def calibrate_peak_tau_and_scale_grid(
             scale_ej = num / den
             E_pred = scale_ej * E_internal
 
-            if not np.all(np.isfinite(E_pred)) or np.all(E_pred <= 0):
+            if not np.all(np.isfinite(E_pred)):
                 continue
 
-            E_pred = np.maximum(E_pred, 1e-300)
-            log_res = np.log(E_ref) - np.log(E_pred)
+            # Résidus linéaires (énergie)
+            res = E_ref - E_pred
 
-            # 4) Calculer l'erreur
-            rss = float(np.sum(log_res**2))
-            mae = float(np.mean(np.abs(log_res)) * 100)  # % log-error
-            
+            # RSS linéaire (ce que tu avais "avant")
+            rss = float(np.sum(res**2))
+
+            # MAE relative (%) pour affichage uniquement
+            mae = float(np.mean(np.abs(res / E_ref)) * 100)
+
             # 5) Garder si RSS < meilleur
             if rss < best_rss:
                 best_rss = rss
