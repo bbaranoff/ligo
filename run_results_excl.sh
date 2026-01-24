@@ -85,6 +85,6 @@ for ev in "${EVENTS[@]}"; do
     --event-params "$EVENT_PARAMS" \
     --refs "$REFS" \
     --ref-key energy_J \
-    --peak-quantile 0.95 --verbose #  --clusters-json clusters.json   --exclude-clusters -1
+    --peak-quantile 0.95 --verbose   --clusters-json clusters.json   --exclude-clusters -1
 done
 echo "results written in results/"

@@ -83,7 +83,7 @@ Mpc = 3.085677581491367e22
 DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
 DEFAULT_PEAK_SCALE = 1.0
-SCALE_EJ_NORM = 5.37e37
+SCALE_EJ_NORM = 5.3e37
 # ------------------
 # NPZ local loading
 # ------------------
@@ -828,12 +828,14 @@ def analyze_event(
 
 
 def calibrate_least_squares(
-    events: List[str],
-    params: Dict[str, Any],
-    y_obs_dict: Dict[str, float],
-    bands: Bands,
+    events,
+    params,
+    y_obs_dict,
+    bands,
+    event_to_cluster=None,
+    exclude_clusters=None,
     **analyze_kwargs
-) -> Tuple[float, float]:
+):
     """
     Calibre TAU_SCALE et SCALE_EJ par moindres carrés.
     
@@ -848,11 +850,22 @@ def calibrate_least_squares(
     
     # Étape 1: Collecter les y_model (E_internal avec TAU_SCALE=1, SCALE_EJ=1)
     data = []
+
     for ev in events:
-        if ev not in y_obs_dict:
+
+        # --- exclusion par cluster ---
+        if exclude_clusters and event_to_cluster:
+            cls = event_to_cluster.get(ev)
+            if cls in exclude_clusters:
+                continue
+
+        # --- valeur observée ---
+        yobs = y_obs_dict.get(ev)
+        if yobs is None:
             continue
-        yobs = float(y_obs_dict[ev])
-        if (not np.isfinite(yobs)) or yobs <= 0.0:
+
+        yobs = float(yobs)
+        if not np.isfinite(yobs) or yobs <= 0.0:
             continue
 
         try:
@@ -863,27 +876,20 @@ def calibrate_least_squares(
                 tau_scale=1.0,
                 scale_ej_in=1.0,
                 peak_scale=1.0,
-                peak_norm=False,
-                plot=False,
                 return_internals=True,
+                plot=False,
                 verbose=False,
                 **analyze_kwargs,
             )
         except Exception as e:
-            try:
-                g = get_event_gps(ev, params)
-            except Exception:
-                g = None
-            print(f"[WARN] skip {ev}: analyze_event failed (gps={g}): {e}")
+            print(f"[WARN] skip {ev}: {e}")
             continue
 
         y_model = float(intern.get("E_internal", 0.0))
-        peak_raw = float(intern.get("peak_raw", 0.0))
-
-        if (not np.isfinite(y_model)) or y_model <= 0.0:
-            print(f"[WARN] skip {ev}: E_internal invalid ({y_model})")
+        if not np.isfinite(y_model) or y_model <= 0.0:
             continue
 
+        peak_raw = float(intern.get("peak_raw", 0.0))
         data.append((ev, yobs, y_model, peak_raw))
 
     if len(data) < 2:
@@ -1041,8 +1047,28 @@ def main() -> None:
 
     ap.add_argument("--plot", action="store_true")
     ap.add_argument("--verbose", "-v", action="store_true", help="Afficher les messages de debug")
+    ap.add_argument(
+        "--clusters-json",
+        type=str,
+        default=None,
+        help="JSON mapping event -> cluster (ex: clusters.json)"
+    )
+
+    ap.add_argument(
+        "--exclude-clusters",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Liste des IDs de clusters à exclure (ex: -1 3)"
+    )
 
     args = ap.parse_args()
+    event_to_cluster = {}
+    # --- exclusion par cluster (globale) ---
+    if args.clusters_json:
+        with open(args.clusters_json, "r") as f:
+            cj = json.load(f)
+        event_to_cluster = cj.get("event_to_cluster", {})
 
     params = load_event_params(args.event_params)
     def _load_json(path: str) -> dict:
@@ -1085,11 +1111,24 @@ def main() -> None:
         y_obs_dict[ev] = v
 
     # si pas d'events donnés -> prendre ceux des refs
+    # si pas d'events donnés -> prendre ceux des refs
     events = list(getattr(args, "events", []) or [])
     if not events:
         events = sorted(y_obs_dict.keys())
 
-    print(f"[cal] refs_loaded={len(refs)} y_obs={len(y_obs_dict)} events={len(events)} ref_key={ref_key}")
+    # --- exclusion par cluster (globale, AVANT LSQ) ---
+    if args.exclude_clusters:
+        events = [
+            ev for ev in events
+            if event_to_cluster.get(ev) not in args.exclude_clusters
+        ]
+
+    print(
+        f"[cal] refs_loaded={len(refs)} "
+        f"y_obs={len(y_obs_dict)} "
+        f"events_after_cluster_exclusion={len(events)} "
+        f"ref_key={ref_key}"
+    )
     bands = Bands(
         tau_band=(float(args.tau_band[0]), float(args.tau_band[1])),
         nu_band=(float(args.nu_band[0]), float(args.nu_band[1])),
@@ -1159,6 +1198,12 @@ def main() -> None:
         tau_band=(float(args.tau_band[0]), float(args.tau_band[1])),
         nu_band=(float(args.nu_band[0]), float(args.nu_band[1])),
     )
+    # --- garde-fou : interdiction d'analyser un event exclu ---
+    if args.event and args.exclude_clusters:
+        cls = event_to_cluster.get(args.event, None)
+        if cls in args.exclude_clusters:
+            print(f"[SKIP] event '{args.event}' appartient au cluster exclu {cls}")
+            return
 
     analyze_event(
         event=ev,

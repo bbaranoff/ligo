@@ -1,157 +1,161 @@
-# LIGO Spectral Calibration — Pipeline expérimental
+# Spectral–Coherent Energy Calibration Pipeline (LIGO)
 
-Ce dépôt implémente un pipeline expérimental pour analyser des événements LIGO/Virgo à partir des **strain time series**, produire des observables spectro-temporelles homogènes, puis étudier leur **calibrabilité mutuelle** via une calibration itérative non supervisée.
+Ce dépôt implémente un pipeline **non-template**, basé sur l’analyse spectrale cohérente H1–L1, visant à :
 
-L’approche est volontairement **agnostique aux paramètres astrophysiques publiés** (masses, spins, inclinaison) pour :
+* estimer une **énergie globale robuste** des événements GW,
+* identifier automatiquement les **événements bien contraints**,
+* calibrer les résultats **sans sur-ajustement astrophysique**,
+* et expliciter **ce qui n’est pas estimable** avec ces observables.
 
-* la sélection des événements,
-* le clustering,
-* la calibration.
-
-Ces paramètres ne sont utilisés **qu’a posteriori**, uniquement pour l’évaluation quantitative des erreurs.
-
----
-
-## Principe général
-
-1. Télécharger les données strain LIGO (H1/L1, Virgo optionnel).
-2. Extraire des observables spectro-temporelles à partir d’une **fenêtre temporelle contrôlée**.
-3. Générer des résultats homogènes par événement (`results/GW*.json`).
-4. Effectuer une calibration itérative par clustering :
-
-   * détection d’outliers,
-   * calibration globale puis locale,
-   * calcul de statistiques *clean* (hors outliers et clusters triviaux).
+Le pipeline est volontairement conservateur :
+il sépare **estimation** et **ignorance mesurée**.
 
 ---
 
-## Installation
+## Vue d’ensemble du pipeline
 
-### Script d’installation (`go.sh`)
+Le workflow complet est le suivant :
 
 ```bash
-#!/bin/bash
-
-# 1. créer l’environnement seulement si absent
-if [ ! -d ".env" ]; then
-    python3 -m venv .env
-fi
-
-# 2. ACTIVER l'env
-source .env/bin/activate
-
-# 3. installer les dépendances
-pip install --upgrade pip
-pip3 install scipy gwosc numpy matplotlib gwpy numba
-# ou : pip install -r requirements.txt
-```
-
----
-
-## Utilisation du pipeline
-
-### 1️⃣ Activer l’environnement
-
-```bash
+# 1. Préparation de l’environnement
 source go.sh
-```
+python write_events.py
 
----
-
-### 2️⃣ Télécharger les données LIGO (NPZ)
-
-Télécharge les fichiers strain nécessaires pour les événements définis :
-
-```bash
-python ligo_npz_downloader.py
-```
-
-Les fichiers sont stockés localement et réutilisés par la suite.
-
----
-
-### 3️⃣ Générer les résultats spectro-temporels
-
-Analyse chaque événement et produit un fichier JSON par événement :
-
-```bash
+# 2. Analyse spectrale cohérente de tous les événements
 bash run_results.sh
-```
 
-Résultat :
+# 3. Clustering latent (énergie, tau, nu_eff)
+python cluster_latent_kmeans.py \
+  --results-glob "results/GW*.json" \
+  --method hdbscan+kmeans \
+  --k 4 \
+  --min-cluster-size 3 \
+  --min-samples 6 \
+  --cluster-selection-epsilon 0.0 \
+  --use-logE \
+  --export clusters.json
 
-```
-results/
- ├── GW150914.json
- ├── GW151226.json
- ├── GW170104.json
- └── ...
-```
+# 4. Recalcul des résultats en excluant les outliers
+mv results results.bak
+bash run_results_excl.sh
 
-Chaque fichier contient uniquement des observables dérivées du **strain**.
-
----
-
-### 4️⃣ Calibration itérative par clustering
-
-Lance la calibration itérative globale + locale :
-
-```bash
+# 5. Calibration itérative par grille exhaustive
 python run_iterative_calibration.py \
   --refs ligo_refs.json \
   --event-params event_params.json \
-  --signal-win 0.6 \
-  --noise-pad 800 \
-  --peak-quantile 0.9 \
+  --results-glob "results/GW*.json" \
+  --method hdbscan+kmeans \
   --k 4 \
-  --db-eps 0.7 \
-  --db-min-samples 2 \
-  --exclude-cls BNS \
+  --min-cluster-size 3 \
+  --min-samples 6 \
+  --cluster-selection-epsilon 0.0 \
   --exclude-cluster-minus1 \
-  --flow 30 \
-  --fhigh 500
+  --exclude-cls BNS \
+  --peak-min 0 --peak-max 2 --peak-step 1 \
+  --tau-min 0  --tau-max 2  --tau-step 1 \
+  --peak-quantile 0.9 \
+  --use-logE \
+  --out calibration_report_astrophysical.txt \
+  --calib-json cluster_calibrations_astrophysical.json
 ```
 
-### Effets de cette étape
+---
 
-* clustering non supervisé des événements,
-* détection automatique des outliers (cluster `-1`),
-* calibration globale puis par cluster,
-* calcul des **stats clean** (hors outliers et clusters à 1 événement).
+## Principe méthodologique
 
-Sorties typiques :
+### 1. Estimation (ce qui est mesurable)
 
-* `calibration_iterative.txt` : rapport détaillé lisible,
-* `cluster_calibrations_iterative.json` : paramètres de calibration.
+Pour chaque événement GW :
+
+* construction d’un signal **cohérent H1–L1**,
+* pondération par le **PSD de bruit réel**,
+* intégration spectrale de l’énergie,
+* calcul d’observables secondaires (τ, ν_eff),
+* **sans templates**, sans paramètres morphologiques.
+
+Cette étape produit une estimation **fermée** :
+l’information provient uniquement des données observées.
 
 ---
 
-## Interprétation des résultats
+### 2. Clustering latent (ce qui est stable)
 
-* **MAE globale** : dominée par les événements non comparables.
-* **Stats clean** :
+Les événements sont regroupés automatiquement à partir de l’espace latent :
 
-  * calculées uniquement sur des événements cohérents entre eux,
-  * sélection indépendante des paramètres astrophysiques publiés,
-  * reflètent un régime physique commun capturé par le modèle.
+* énergie (log),
+* délais temporels,
+* signatures spectrales.
 
-Les événements exclus (outliers) correspondent généralement à :
+Objectif :
 
-* systèmes NSBH,
-* rapports de masse extrêmes,
-* géométries fortement dégénérées.
-
----
-
-## Cadre et limites
-
-* Ce pipeline **ne cherche pas** une loi universelle.
-* Il met en évidence l’existence de **sous-populations calibrables** à partir du strain seul.
-* Toute extension nécessite l’introduction explicite de paramètres supplémentaires (spin effectif, q, inclinaison…).
+* identifier les événements **cohérents entre eux**,
+* isoler les **outliers** et les cas non contraints,
+* éviter toute sélection manuelle a posteriori.
 
 ---
 
-## Résumé en une phrase
+### 3. Calibration par grille exhaustive (sans triche)
 
-> Ce pipeline montre qu’un sous-ensemble d’événements LIGO est mutuellement calibrable à partir de la seule structure spectro-temporelle du strain, via un choix contrôlé de fenêtre temporelle et une mise à l’échelle énergétique globale.
+Pour chaque cluster stable :
 
+* exploration **discrète** des paramètres `(PEAK_SCALE, TAU_SCALE)`
+  ici volontairement limités à `{0, 1, 2}`,
+* calcul analytique de `SCALE_EJ`,
+* sélection par erreur relative globale (MAE / médiane),
+* **aucun ajustement continu**, aucun fit caché.
+
+Cette approche empêche le sur-ajustement et rend la calibration traçable.
+
+---
+
+## Résultats
+
+```
+======================================================================
+✅ CALIBRATION PAR GRILLE EXHAUSTIVE TERMINÉE
+======================================================================
+MAE globale : 19.92%
+Médiane     : 16.16%
+
+✨ STATS CLEAN (sans outliers ni clusters 1-event):
+MAE clean   : 19.92%
+Médiane     : 16.16%
+N clean     : 23
+======================================================================
+```
+
+* **23 événements** bien contraints,
+* **≈ 16 % d’erreur médiane** sur l’énergie / masse équivalente,
+* sans templates,
+* sans hypothèses astrophysiques fortes,
+* avec identification explicite des événements non estimables.
+
+Rapport détaillé :
+`calibration_report_astrophysical.txt`
+
+Paramètres calibrés par cluster :
+`cluster_calibrations_astrophysical.json`
+
+---
+
+## Ce que ce pipeline montre
+
+* Une estimation globale robuste est possible **sans modèles d’ondes**.
+* Tous les événements ne sont **pas également contraints** — et c’est mesuré.
+* Les paramètres τ et peak ont un **impact limité** sur l’énergie globale.
+* La performance vient de la **cohérence spectrale**, pas du tuning.
+
+Ce travail ne remplace pas les pipelines bayésiens existants.
+Il montre autre chose :
+
+> **où l’information est réellement présente dans les données,
+> et où elle ne l’est pas.**
+
+---
+
+## Statut
+
+* Approche méthodologique exploratoire
+* Résultats reproductibles
+* Zéro claim astrophysique fort
+* Prêt pour analyse comparative ou stress-testing

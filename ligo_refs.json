@@ -1,0 +1,392 @@
+{
+  "GW150914": {
+    "msun_c2": 3.0,
+    "energy_J": 5.361443130788399e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v4)"
+  },
+  "GW151226": {
+    "msun_c2": 1.0,
+    "energy_J": 1.7871477102627997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v3)"
+  },
+  "GW170104": {
+    "msun_c2": 2.1,
+    "energy_J": 3.753010191551882e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v3)"
+  },
+  "GW170809": {
+    "msun_c2": 2.8,
+    "energy_J": 5.004013588735834e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW170814": {
+    "msun_c2": 2.8,
+    "energy_J": 5.004013588735834e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v4)"
+  },
+  "GW170818": {
+    "msun_c2": 2.8,
+    "energy_J": 5.004013588735834e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW170823": {
+    "msun_c2": 3.1,
+    "energy_J": 5.5401579018146814e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190403_051519": {
+    "msun_c2": 4.4,
+    "energy_J": 7.863449925156304e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v1)"
+  },
+  "GW190408_181802": {
+    "msun_c2": 2.0,
+    "energy_J": 3.5742954205255994e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190412": {
+    "msun_c2": 1.2,
+    "energy_J": 2.144577252315352e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v4)"
+  },
+  "GW190413_052954": {
+    "msun_c2": 2.5,
+    "energy_J": 4.467869275656999e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190413_134308": {
+    "msun_c2": 3.3,
+    "energy_J": 5.897587443867233e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190421_213856": {
+    "msun_c2": 3.1,
+    "energy_J": 5.540157901814669e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190426_190642": {
+    "msun_c2": 9.4,
+    "energy_J": 1.679918847647033e+48,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v1)"
+  },
+  "GW190503_185404": {
+    "msun_c2": 2.9,
+    "energy_J": 5.182728359762129e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190512_180714": {
+    "msun_c2": 1.5,
+    "energy_J": 2.6807215653941997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190513_205428": {
+    "msun_c2": 2.3,
+    "energy_J": 4.110439733604435e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190514_065416": {
+    "msun_c2": 2.9,
+    "energy_J": 5.1827283597621035e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190517_055101": {
+    "msun_c2": 4.0,
+    "energy_J": 7.148590841051186e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190519_153544": {
+    "msun_c2": 5.6,
+    "energy_J": 1.0008027177471667e+48,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190521": {
+    "msun_c2": 5.7,
+    "energy_J": 1.0186741948497938e+48,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v4)"
+  },
+  "GW190521_074359": {
+    "msun_c2": 3.7,
+    "energy_J": 6.612446527972364e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190527_092055": {
+    "msun_c2": 2.6,
+    "energy_J": 4.646584046683282e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190602_175927": {
+    "msun_c2": 5.1,
+    "energy_J": 9.114453322340268e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190701_203306": {
+    "msun_c2": 4.1,
+    "energy_J": 7.327305612077469e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190706_222641": {
+    "msun_c2": 5.3,
+    "energy_J": 9.471882864392834e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190707_093326": {
+    "msun_c2": 0.9,
+    "energy_J": 1.6084329392365235e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190719_215514": {
+    "msun_c2": 2.7,
+    "energy_J": 4.8252988177095645e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190720_000836": {
+    "msun_c2": 1.0,
+    "energy_J": 1.7871477102627997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190725_174728": {
+    "msun_c2": 0.7,
+    "energy_J": 1.2510033971839584e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v1)"
+  },
+  "GW190727_060333": {
+    "msun_c2": 3.4,
+    "energy_J": 6.076302214893503e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190728_064510": {
+    "msun_c2": 1.0,
+    "energy_J": 1.7871477102627997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190731_140936": {
+    "msun_c2": 3.3,
+    "energy_J": 5.897587443867233e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190803_022701": {
+    "msun_c2": 2.9,
+    "energy_J": 5.1827283597621165e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190805_211137": {
+    "msun_c2": 4.3,
+    "energy_J": 7.684735154130033e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v1)"
+  },
+  "GW190828_063405": {
+    "msun_c2": 2.9,
+    "energy_J": 5.182728359762129e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190828_065509": {
+    "msun_c2": 1.3,
+    "energy_J": 2.3232920233416348e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190910_112807": {
+    "msun_c2": 3.6,
+    "energy_J": 6.433731756946069e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190915_235702": {
+    "msun_c2": 2.5,
+    "energy_J": 4.467869275656999e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190916_200658": {
+    "msun_c2": 3.0,
+    "energy_J": 5.361443130788399e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v1)"
+  },
+  "GW190924_021846": {
+    "msun_c2": 0.6,
+    "energy_J": 1.0722886261576792e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190929_012149": {
+    "msun_c2": 3.0,
+    "energy_J": 5.361443130788399e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW190930_133541": {
+    "msun_c2": 1.0,
+    "energy_J": 1.7871477102627997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-2.1-confident/v2)"
+  },
+  "GW191109_010717": {
+    "msun_c2": 5.0,
+    "energy_J": 8.935738551313998e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191126_115259": {
+    "msun_c2": 1.1,
+    "energy_J": 1.965862481289076e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191127_050227": {
+    "msun_c2": 4.0,
+    "energy_J": 7.148590841051199e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191129_134029": {
+    "msun_c2": 0.7,
+    "energy_J": 1.2510033971839584e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191204_171526": {
+    "msun_c2": 1.01,
+    "energy_J": 1.8050191873654303e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191215_223052": {
+    "msun_c2": 1.9,
+    "energy_J": 3.3955806494993166e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191222_033537": {
+    "msun_c2": 3.5,
+    "energy_J": 6.255016985919799e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW191230_180458": {
+    "msun_c2": 4.0,
+    "energy_J": 7.148590841051199e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200128_022011": {
+    "msun_c2": 4.0,
+    "energy_J": 7.148590841051199e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200129_065458": {
+    "msun_c2": 3.1,
+    "energy_J": 5.540157901814669e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200202_154313": {
+    "msun_c2": 0.82,
+    "energy_J": 1.46546112241549e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200208_222617": {
+    "msun_c2": 2.0,
+    "energy_J": 3.5742954205255994e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200219_094415": {
+    "msun_c2": 2.8,
+    "energy_J": 5.004013588735834e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200220_061928": {
+    "msun_c2": 7.0,
+    "energy_J": 1.2510033971839598e+48,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200220_124850": {
+    "msun_c2": 3.0,
+    "energy_J": 5.361443130788399e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200224_222234": {
+    "msun_c2": 3.6,
+    "energy_J": 6.433731756946069e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200225_060421": {
+    "msun_c2": 1.4,
+    "energy_J": 2.502006794367917e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200306_093714": {
+    "msun_c2": 2.2,
+    "energy_J": 3.931724962578152e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200308_173609": {
+    "msun_c2": 4.0,
+    "energy_J": 7.148590841051199e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200311_115853": {
+    "msun_c2": 2.9,
+    "energy_J": 5.1827283597621165e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200316_215756": {
+    "msun_c2": 1.0,
+    "energy_J": 1.7871477102627997e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  },
+  "GW200322_091133": {
+    "msun_c2": 2.0,
+    "energy_J": 3.5742954205255994e+47,
+    "cls": "BBH",
+    "source": "GWOSC EventAPI (GWTC-3-confident/v1)"
+  }
+}

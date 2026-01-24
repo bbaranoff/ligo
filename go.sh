@@ -12,3 +12,4 @@ source .env/bin/activate
 pip install --upgrade pip
 pip3 install scipy gwosc numpy matplotlib gwpy numba
 # ou pip install -r requirements.txt
+python download_all_npz.py
