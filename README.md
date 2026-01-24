@@ -25,15 +25,7 @@ python write_events.py
 bash run_results.sh
 
 # 3. Clustering latent (énergie, tau, nu_eff)
-python cluster_latent_kmeans.py \
-  --results-glob "results/GW*.json" \
-  --method hdbscan+kmeans \
-  --k 4 \
-  --min-cluster-size 3 \
-  --min-samples 6 \
-  --cluster-selection-epsilon 0.0 \
-  --use-logE \
-  --export clusters.json
+python cluster_latent_kmeans.py   --results-glob "results/GW*.json"   --method hdbscan+kmeans   --k 4   --min-cluster-size 3   --min-samples 5   --cluster-selection-epsilon 0.0   --use-logE   --export clusters.json
 
 # 4. Recalcul des résultats en excluant les outliers
 mv results results.bak
