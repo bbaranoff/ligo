@@ -83,7 +83,7 @@ Mpc = 3.085677581491367e22
 DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
 DEFAULT_PEAK_SCALE = 1.0
-SCALE_EJ_NORM = 5.3e37
+SCALE_EJ_NORM = 4.3e37
 # ------------------
 # NPZ local loading
 # ------------------

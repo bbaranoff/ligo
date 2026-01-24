@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
+mv results results.bak
 PYTHON=python3
 SCRIPT=ligo_spectral_planck.py
 

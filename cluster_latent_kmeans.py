@@ -198,7 +198,7 @@ def cluster_events(
     
     Args:
         X: Matrice de features (n_samples, n_features), déjà normalisée
-        method: Algorithme ('hdbscan', 'dbscan', 'kmeans', 'hdbscan+kmeans')
+        method: Algorithme ('hdbscan', 'dbscan', 'kmeans', 'hdbscan+kmeans', 'dbscan+kmeans')
         **kwargs: Paramètres spécifiques à l'algorithme
     
     Returns:
@@ -209,6 +209,48 @@ def cluster_events(
         ValueError: Si l'algorithme demandé n'est pas disponible
     """
     method = method.lower()
+    
+    # ========== DBSCAN + KMeans ==========
+    if method == "dbscan+kmeans":
+        # Phase 1: DBSCAN pour détecter les outliers
+        eps = kwargs.get("eps", kwargs.get("db_eps", 0.5))
+        min_samples = kwargs.get("min_samples", kwargs.get("db_min_samples", 3))
+        
+        clusterer = DBSCAN(eps=eps, min_samples=min_samples, metric='euclidean')
+        db_labels = clusterer.fit_predict(X)
+        
+        # Séparer outliers (-1) et inliers (≥0)
+        outlier_mask = (db_labels == -1)
+        n_outliers = np.sum(outlier_mask)
+        
+        if n_outliers == len(X):
+            # Tous sont outliers, utiliser KMeans sur tout
+            print(f"[INFO] DBSCAN: tous outliers ({n_outliers}), utilisation de KMeans complet")
+            k = kwargs.get("k", kwargs.get("n_clusters", 3))
+            random_state = kwargs.get("seed", kwargs.get("random_state", 42))
+            clusterer_km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+            return clusterer_km.fit_predict(X)
+        
+        if n_outliers == 0:
+            # Aucun outlier, retourner les clusters DBSCAN
+            print(f"[INFO] DBSCAN: aucun outlier, {len(np.unique(db_labels))} clusters")
+            return db_labels
+        
+        # Phase 2: KMeans sur les inliers
+        print(f"[INFO] DBSCAN: {n_outliers} outliers détectés, KMeans sur {len(X)-n_outliers} inliers")
+        
+        X_inliers = X[~outlier_mask]
+        k = kwargs.get("k", kwargs.get("n_clusters", 3))
+        random_state = kwargs.get("seed", kwargs.get("random_state", 42))
+        
+        clusterer_km = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        km_labels = clusterer_km.fit_predict(X_inliers)
+        
+        # Recombiner: outliers gardent -1, inliers ont leurs nouveaux labels KMeans
+        final_labels = np.full(len(X), -1, dtype=int)
+        final_labels[~outlier_mask] = km_labels
+        
+        return final_labels
     
     # ========== HDBSCAN + KMeans ==========
     if method == "hdbscan+kmeans":
@@ -300,7 +342,8 @@ def cluster_events(
         return labels
     
     else:
-        raise ValueError(f"Méthode inconnue: {method}. Utiliser 'hdbscan', 'dbscan' ou 'kmeans'")
+        raise ValueError(f"Méthode inconnue: {method}. "
+                        f"Utiliser 'hdbscan', 'hdbscan+kmeans', 'dbscan', 'dbscan+kmeans' ou 'kmeans'")
 
 
 # ============================================================
