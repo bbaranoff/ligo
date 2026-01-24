@@ -25,7 +25,15 @@ python write_events.py
 bash run_results.sh
 
 # 3. Clustering latent (énergie, tau, nu_eff)
-python cluster_latent_kmeans.py   --results-glob "results/GW*.json"   --method hdbscan+kmeans   --k 4   --min-cluster-size 3   --min-samples 5   --cluster-selection-epsilon 0.0   --use-logE   --export clusters.json
+python cluster_latent_kmeans.py \
+  --results-glob "results/GW*.json" \
+  --method hdbscan+kmeans \
+  --k 4 \
+  --min-cluster-size 3 \
+  --min-samples 5 \
+  --cluster-selection-epsilon 0.0 \
+  --use-logE \
+  --export clusters.json
 
 # 4. Recalcul des résultats en excluant les outliers
 mv results results.bak
@@ -39,16 +47,15 @@ python run_iterative_calibration.py \
   --method hdbscan+kmeans \
   --k 4 \
   --min-cluster-size 3 \
-  --min-samples 6 \
+  --min-samples 4 \
   --cluster-selection-epsilon 0.0 \
   --exclude-cluster-minus1 \
-  --exclude-cls BNS \
-  --peak-min 0 --peak-max 2 --peak-step 1 \
-  --tau-min 0  --tau-max 2  --tau-step 1 \
-  --peak-quantile 0.9 \
   --use-logE \
-  --out calibration_report_astrophysical.txt \
-  --calib-json cluster_calibrations_astrophysical.json
+  --peak-step 0.5 \
+  --tau-step 0.5 \
+  --tau-min 2.5 \
+  --tau-max 4.5
+
 ```
 
 ---
