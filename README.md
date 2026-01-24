@@ -39,8 +39,7 @@ python cluster_latent_kmeans.py \
   --use-logE \
   --export clusters.json
 
-# 4. Recalcul des résultats en excluant les outliers
-mv results results.bak
+# 4. Recalcul des résultats en excluant les outliers (attention au mv dans run_results_excl.sh !!)
 bash run_results_excl.sh
 
 # 5. Calibration itérative par grille exhaustive
