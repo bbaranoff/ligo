@@ -19,7 +19,7 @@ Le workflow complet est le suivant :
 ```bash
 # 0. Clone git and checkout
 git clone https://github.com/bbaranoff/ligo/
-git checkout e3653046dc36ac2652797791902e2f9d242857d3
+git checkout d30e9882ee56f3b0607c36a14af1a2372c07a941
 
 # 1. Préparation de l’environnement
 source go.sh
@@ -39,7 +39,7 @@ python cluster_latent_kmeans.py \
   --use-logE \
   --export clusters.json
 
-# 4. Recalcul des résultats en excluant les outliers (attention au mv dans run_results_excl.sh !!)
+# 4. Recalcul des résultats en excluant les outliers
 bash run_results_excl.sh
 
 # 5. Calibration itérative par grille exhaustive
