@@ -1,4 +1,4 @@
-# Spectral–Coherent Energy Calibration Pipeline (LIGO) — v2
+# Spectral–Coherent Energy Calibration Pipeline (LIGO)
 
 Ce dépôt implémente un pipeline **spectral cohérent H1–L1**, sans templates, structuré en trois phases strictement séparées :
 
@@ -15,6 +15,7 @@ Chaque étape est traçable, reproductible, et ne dépend que des sorties de l�
 ### 0. Environnement
 
 ```bash
+git checkout 995c70c26e9428f326fa26afde23447c834e3b7b
 source go.sh
 ```
 
