@@ -83,7 +83,14 @@ Mpc = 3.085677581491367e22
 DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
 DEFAULT_PEAK_SCALE = 1.0
-SCALE_EJ_NORM = 4.3e37
+# Constante de Planck (J·s)
+h = 6.62607015e-34
+
+# Action classique typique (J·s)
+S_classique = 3.193015e4
+
+# Rapport classique / quantique
+SCALE_EJ_NORM = S_classique / h
 # ------------------
 # NPZ local loading
 # ------------------
@@ -443,6 +450,7 @@ def analyze_event(
     peak_norm: bool = False,
     peak_quantile: float = 99.5,
     tau_scale: float = DEFAULT_TAU_SCALE,
+    nu_scale: float = 1.0,
     scale_ej_in: float = DEFAULT_SCALE_EJ,
     peak_scale: float = DEFAULT_PEAK_SCALE,
     plot: bool = False,
@@ -465,6 +473,7 @@ def analyze_event(
         peak_norm: Normaliser par le peak
         peak_quantile: Quantile pour le peak
         tau_scale: Facteur multiplicatif pour tau
+        nu_scale: Facteur multiplicatif pour nu_eff
         scale_ej_in: Facteur d'échelle d'énergie
         peak_scale: Facteur multiplicatif pour amplitude des signaux
         plot: Générer des plots
@@ -602,8 +611,8 @@ def analyze_event(
     # 3) Tau (H1-L1) estimation
     # -----------------------------
     tb0, tb1 = bands.tau_band
-    seg_tau_H = crop_array(hH, fs, t0H, gps - 0.2, gps + 0.2)
-    seg_tau_L = crop_array(hL, fs, t0L, gps - 0.2, gps + 0.2)
+    seg_tau_H = crop_array(hH, fs, t0H, gps - nu_scale, gps + nu_scale)
+    seg_tau_L = crop_array(hL, fs, t0L, gps - nu_scale, gps + nu_scale)
 
     x_tau = safe_bandpass(seg_tau_H, fs, *bands.tau_band)
     y_tau = safe_bandpass(seg_tau_L, fs, *bands.tau_band)
@@ -736,8 +745,7 @@ def analyze_event(
 
     nu_eff = nu_eff_energy(f_use[mask_nu], dEdf[mask_nu]) if np.any(mask_nu) else 0.0
     nu_eff_raw = nu_eff_energy(f_use, dEdf)
-
-
+    
     # -------------------------------------------------
     # Mass equivalent
     # -------------------------------------------------
@@ -775,6 +783,7 @@ def analyze_event(
         "nu_band_Hz": [float(nb0), float(nb1)],
         "tau_hl_s": float(tau_hl_s),
         "TAU_SCALE": float(tau_scale),
+        "NU_SCALE": float(nu_scale),
         "SCALE_EJ": float(scale_ej_in),
         "PEAK_SCALE": float(peak_scale),
         "E_internal": float(E_internal),
@@ -797,7 +806,7 @@ def analyze_event(
     if verbose:
         print(f"=== ANALYSE SPECTRALE {event} ===")
         print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
-        print(f"nu_eff  = {nu_eff:.2f} Hz")
+        print(f"nu_eff  = {nu_eff:.2f} Hz (nu_scale={nu_scale:.2f})")
         print(f"Tau (H1-L1): {tau_hl:.6e} s")
 
     if plot:
@@ -1030,6 +1039,8 @@ def main() -> None:
 
     ap.add_argument("--tau-scale", type=float, default=DEFAULT_TAU_SCALE, 
                     help=f"Facteur multiplicatif pour tau (défaut: {DEFAULT_TAU_SCALE})")
+    ap.add_argument("--nu-scale", type=float, default=1.0,
+                    help="Facteur multiplicatif pour nu_eff (défaut: 1.0)")
     ap.add_argument("--scale-ej", type=float, default=DEFAULT_SCALE_EJ,
                     help=f"Facteur d'échelle d'énergie (défaut: {DEFAULT_SCALE_EJ})")
     ap.add_argument("--peak-scale", type=float, default=DEFAULT_PEAK_SCALE,
@@ -1165,6 +1176,7 @@ def main() -> None:
         with open(args.cal_out, "w") as f:
             json.dump({
                 "TAU_SCALE": float(tau_scale), 
+        "NU_SCALE": float(nu_scale),
                 "SCALE_EJ": float(scale), 
                 "PEAK_SCALE": float(args.peak_scale)
             }, f, indent=2)
@@ -1202,7 +1214,8 @@ def main() -> None:
     if args.event and args.exclude_clusters:
         cls = event_to_cluster.get(args.event, None)
         if cls in args.exclude_clusters:
-            print(f"[SKIP] event '{args.event}' appartient au cluster exclu {cls}")
+            if args.verbose:
+                print(f"[SKIP] event '{args.event}' appartient au cluster exclu {cls}")
             return
 
     analyze_event(
@@ -1218,6 +1231,7 @@ def main() -> None:
         peak_norm=bool(args.peak_norm),
         peak_quantile=float(args.peak_quantile),
         tau_scale=float(args.tau_scale),
+        nu_scale=float(args.nu_scale),
         scale_ej_in=float(args.scale_ej),
         peak_scale=float(args.peak_scale),
         plot=bool(args.plot),

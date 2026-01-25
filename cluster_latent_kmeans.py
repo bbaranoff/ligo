@@ -654,6 +654,10 @@ Exemples:
   python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
       --method hdbscan+kmeans --k 5 --min-cluster-size 3
   
+  # DBSCAN puis KMeans sur les inliers (hybride, plus stable)
+  python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
+      --method dbscan+kmeans --k 4 --eps 0.8 --min-samples 3
+  
   # DBSCAN avec paramètres personnalisés
   python cluster_latent_kmeans.py --results-glob "results/GW*.json" \\
       --method dbscan --eps 1.2 --min-samples 3
@@ -678,7 +682,7 @@ Exemples:
     # Méthode de clustering
     parser.add_argument(
         "--method",
-        choices=["hdbscan", "dbscan", "kmeans", "hdbscan+kmeans"],
+        choices=["hdbscan", "dbscan", "kmeans", "hdbscan+kmeans", "dbscan+kmeans"],
         default="hdbscan",
         help="Algorithme de clustering (défaut: hdbscan)"
     )

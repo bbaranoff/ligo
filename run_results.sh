@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PYTHON=python3
-SCRIPT=ligo_spectral.py
+SCRIPT=ligo_spectral_planck.py
 
 EVENT_PARAMS=event_params.json
 REFS=ligo_refs.json

@@ -1,163 +1,196 @@
-# Spectral–Coherent Energy Calibration Pipeline (LIGO)
+# Spectral–Coherent Energy Calibration Pipeline (LIGO) — v2
 
-Ce dépôt implémente un pipeline **non-template**, basé sur l’analyse spectrale cohérente H1–L1, visant à :
+Ce dépôt implémente un pipeline **spectral cohérent H1–L1**, sans templates, structuré en trois phases strictement séparées :
 
-* estimer une **énergie globale robuste** des événements GW,
-* identifier automatiquement les **événements bien contraints**,
-* calibrer les résultats **sans sur-ajustement astrophysique**,
-* et expliciter **ce qui n’est pas estimable** avec ces observables.
+1. **Estimation spectrale brute** (données uniquement)
+2. **Clustering latent optimisé automatiquement**
+3. **Calibration itérative par cluster (GPU/CUDA)**
 
-Le pipeline est volontairement conservateur :
-il sépare **estimation** et **ignorance mesurée**.
+Chaque étape est traçable, reproductible, et ne dépend que des sorties de l’étape précédente.
 
 ---
 
-## Vue d’ensemble du pipeline
+## Exécution complète du pipeline
 
-Le workflow complet est le suivant :
+### 0. Environnement
 
 ```bash
-# 0. Clone git and checkout
-git clone https://github.com/bbaranoff/ligo/
-git checkout d30e9882ee56f3b0607c36a14af1a2372c07a941
-
-# 1. Préparation de l’environnement
 source go.sh
-python write_events.py
+```
 
-# 2. Analyse spectrale cohérente de tous les événements
+Le pipeline utilise **CUDA par défaut** lorsqu’un GPU compatible est disponible
+(`ligo_spectral_gpu`, via CuPy).
+Le mode CPU n’est utilisé qu’en fallback explicite.
+
+---
+
+### 1. Analyse spectrale cohérente (tous événements)
+
+```bash
 bash run_results.sh
+```
 
-# 3. Clustering latent (énergie, tau, nu_eff)
+Cette étape :
+
+* charge les données LIGO/Virgo,
+* construit un signal cohérent H1–L1,
+* intègre l’énergie spectrale,
+* calcule `τ` et `ν_eff`,
+* écrit un fichier JSON par événement dans `results/`.
+
+Aucun clustering, aucune calibration à ce stade.
+
+---
+
+### 2. Optimisation automatique du clustering latent
+
+```bash
+python optimize_clustering.py --min-clean 20
+```
+
+Cette étape :
+
+* teste automatiquement plusieurs configurations de clustering,
+* évalue chaque configuration sur :
+
+  * MAE CLEAN,
+  * médiane,
+  * proportion d’événements conservés,
+* sélectionne **la meilleure configuration globale**.
+
+#### Résultat (exemple réel)
+
+```
+📊 Résultats finaux:
+   MAE CLEAN : 27.3%
+   Médiane   : 22.8%
+   N clean   : 29/63 (46.0%)
+   Score     : 21.21
+```
+
+Les paramètres optimaux sont sauvegardés dans :
+
+```
+best_clustering_params.json
+```
+
+#### Commande de reproduction (émise automatiquement)
+
+```bash
 python cluster_latent_kmeans.py \
-  --results-glob "results/GW*.json" \
-  --method hdbscan+kmeans \
-  --k 4 \
-  --min-cluster-size 3 \
-  --min-samples 5 \
-  --cluster-selection-epsilon 0.0 \
+  --results-glob 'results/GW*.json' \
+  --method dbscan+kmeans \
+  --k 3 \
+  --eps 0.6 \
+  --min-samples 3 \
   --use-logE \
   --export clusters.json
+```
 
-# 4. Recalcul des résultats en excluant les outliers
-bash run_results_excl.sh
+---
 
-# 5. Calibration itérative par grille exhaustive
+### 3. Reproduction explicite du clustering optimal
+
+La commande fournie par `optimize_clustering.py` doit ensuite être **rejouée telle quelle** :
+
+```bash
+python cluster_latent_kmeans.py \
+  --results-glob 'results/GW*.json' \
+  --method dbscan+kmeans \
+  --k 3 \
+  --eps 0.6 \
+  --min-samples 3 \
+  --use-logE \
+  --export clusters.json
+```
+
+Cette étape produit :
+
+* `clusters.json`
+* l’affectation finale des événements aux clusters
+* le cluster `-1` correspondant aux **outliers**
+
+---
+
+### 4. Calibration itérative par cluster (GPU / CUDA)
+
+```bash
 python run_iterative_calibration.py \
   --refs ligo_refs.json \
   --event-params event_params.json \
-  --results-glob "results/GW*.json" \
-  --method hdbscan+kmeans \
-  --k 4 \
-  --min-cluster-size 3 \
-  --min-samples 4 \
-  --cluster-selection-epsilon 0.0 \
+  --clusters clusters.json \
   --exclude-cluster-minus1 \
-  --use-logE \
-  --peak-step 0.5 \
-  --tau-step 0.5 \
-  --tau-min 2.5 \
-  --tau-max 4.5
-
+  --peak-scale 1.0 \
+  --k-target 10.0 \
+  --nu-min 0.1 --nu-max 1.5 --nu-step 0.2 \
+  --max-iter 10
 ```
 
----
+#### Points clés
 
-## Principe méthodologique
+* **CUDA activé par défaut**
+* le cluster `-1` est explicitement exclu
+* `PEAK_SCALE` est fixé
+* `K = PEAK² × TAU × SCALE_EJ` est imposé
+* `NU_SCALE` est exploré **sur une grille discrète**
+* `SCALE_EJ` et `TAU_SCALE` sont calculés analytiquement
+* arrêt par convergence ou stagnation
 
-### 1. Estimation (ce qui est mesurable)
-
-Pour chaque événement GW :
-
-* construction d’un signal **cohérent H1–L1**,
-* pondération par le **PSD de bruit réel**,
-* intégration spectrale de l’énergie,
-* calcul d’observables secondaires (τ, ν_eff),
-* **sans templates**, sans paramètres morphologiques.
-
-Cette étape produit une estimation **fermée** :
-l’information provient uniquement des données observées.
+Tout paramètre passé en ligne de commande **écrase les valeurs du JSON**
+(`event_params.json` ne fournit que des valeurs par défaut).
 
 ---
 
-### 2. Clustering latent (ce qui est stable)
+## Résultats de calibration (exemple réel)
 
-Les événements sont regroupés automatiquement à partir de l’espace latent :
+### Cluster 0 (14 événements)
 
-* énergie (log),
-* délais temporels,
-* signatures spectrales.
-
-Objectif :
-
-* identifier les événements **cohérents entre eux**,
-* isoler les **outliers** et les cas non contraints,
-* éviter toute sélection manuelle a posteriori.
+* `NU_SCALE = 1.5`
+* `TAU_SCALE = 23.52`
+* `SCALE_EJ = 0.425`
+* **MAE = 28.31 %**
 
 ---
 
-### 3. Calibration par grille exhaustive (sans triche)
+### Cluster 1 (5 événements)
 
-Pour chaque cluster stable :
-
-* exploration **discrète** des paramètres `(PEAK_SCALE, TAU_SCALE)`
-  ici volontairement limités à `{0, 1, 2}`,
-* calcul analytique de `SCALE_EJ`,
-* sélection par erreur relative globale (MAE / médiane),
-* **aucun ajustement continu**, aucun fit caché.
-
-Cette approche empêche le sur-ajustement et rend la calibration traçable.
+* `NU_SCALE = 1.5`
+* `TAU_SCALE = 6.64`
+* `SCALE_EJ = 1.51`
+* **MAE = 17.57 %**
 
 ---
 
-## Résultats
+### Cluster 2 (10 événements)
 
-```
-======================================================================
-✅ CALIBRATION PAR GRILLE EXHAUSTIVE TERMINÉE
-======================================================================
-MAE globale : 19.92%
-Médiane     : 16.16%
-
-✨ STATS CLEAN (sans outliers ni clusters 1-event):
-MAE clean   : 19.92%
-Médiane     : 16.16%
-N clean     : 23
-======================================================================
-```
-
-* **23 événements** bien contraints,
-* **≈ 16 % d’erreur médiane** sur l’énergie / masse équivalente,
-* sans templates,
-* sans hypothèses astrophysiques fortes,
-* avec identification explicite des événements non estimables.
-
-Rapport détaillé :
-`calibration_report_astrophysical.txt`
-
-Paramètres calibrés par cluster :
-`cluster_calibrations_astrophysical.json`
+* `NU_SCALE = 1.3`
+* `TAU_SCALE = 8.72`
+* `SCALE_EJ = 1.15`
+* **MAE = 22.20 %**
 
 ---
 
-## Ce que ce pipeline montre
+### Fichiers produits
 
-* Une estimation globale robuste est possible **sans modèles d’ondes**.
-* Tous les événements ne sont **pas également contraints** — et c’est mesuré.
-* Les paramètres τ et peak ont un **impact limité** sur l’énergie globale.
-* La performance vient de la **cohérence spectrale**, pas du tuning.
+* `clusters.json`
+* `best_clustering_params.json`
+* `cluster_calibrations_iterative.json`
+* `calibration_iterative.txt`
 
-Ce travail ne remplace pas les pipelines bayésiens existants.
-Il montre autre chose :
+---
 
-> **où l’information est réellement présente dans les données,
+## Philosophie du pipeline
+
+* Pas de templates
+* Pas de fit continu caché
+* Pas d’hypothèses astrophysiques fortes
+* Séparation stricte :
+  **estimation → sélection → calibration**
+* Identification explicite de ce qui est **non contraint**
+
+Ce pipeline ne cherche pas à remplacer les analyses bayésiennes LIGO.
+Il répond à une autre question :
+
+> **où est réellement l’information mesurable dans les données,
 > et où elle ne l’est pas.**
 
----
-
-## Statut
-
-* Approche méthodologique exploratoire
-* Résultats reproductibles
-* Zéro claim astrophysique fort
-* Prêt pour analyse comparative ou stress-testing
