@@ -37,15 +37,6 @@ except ImportError:
 # Constantes physiques
 c = 299792458.0
 M_sun = 1.98847e30
-Mpc = 3.085677581491367e22
-# Constante de Planck (J·s)
-h = 6.62607015e-34
-
-# Action classique typique (J·s)
-S_classique = 3.193015e4
-
-# Rapport classique / quantique
-SCALE_EJ_NORM = S_classique / h
 
 
 # ============================================================================
@@ -77,107 +68,101 @@ def load_npz(path: str) -> Tuple[np.ndarray, float, float, float]:
 # ============================================================================
 
 def bandpass_gpu(data_gpu, fs, flow, fhigh, order=4):
-    """Bandpass filter sur GPU - OPTIMISÉ sans sync"""
-    # Convertir vers GPU si nécessaire
+    """Bandpass Butterworth sur GPU (sosfiltfilt, phase nulle).
+
+    Un masque rectangulaire en FFT génère du ringing de Gibbs :
+    on utilise un filtre SOS causal->rétro (phase nulle) équivalent à la version CPU.
+    """
     if not isinstance(data_gpu, cp.ndarray):
         data_gpu = cp.asarray(data_gpu)
-    
+
     nyq = 0.5 * fs
-    low = flow / nyq
-    high = min(fhigh / nyq, 0.999)
-    
-    # Limiter order pour éviter instabilités
-    if low < 0.01:
-        low = 0.01
-    if high > 0.99:
-        high = 0.99
-    
-    try:
-        sos = cp_butter(order, [low, high], btype='band', output='sos')
-        # sosfiltfilt peut être lent, utiliser une seule passe
-        # return cp_sosfiltfilt(sos, data_gpu)
-        
-        # Alternative: FFT bandpass (plus rapide)
-        n = len(data_gpu)
-        nfft = n
-        
-        # FFT
-        data_fft = cp.fft.rfft(data_gpu, n=nfft)
-        freqs = cp.fft.rfftfreq(nfft, d=1.0/fs)
-        
-        # Masque bande passante
-        mask = (freqs >= flow) & (freqs <= fhigh)
-        data_fft[~mask] = 0
-        
-        # IFFT
-        result = cp.fft.irfft(data_fft, n=nfft)
-        
-        return result[:n]
-        
-    except Exception as e:
-        print(f"   ⚠️  Bandpass GPU failed: {e}, using passthrough")
-        return data_gpu
+    f1 = max(float(flow), 0.1)
+    f2 = min(float(fhigh), 0.95 * nyq)
+    if f2 <= f1:
+        f2 = min(0.95 * nyq, f1 + 10.0)
+
+    sos = cp_butter(order, [f1 / nyq, f2 / nyq], btype='band', output='sos')
+    padlen = 3 * (sos.shape[0] - 1)
+    if data_gpu.size <= padlen:
+        return cp.zeros_like(data_gpu)
+    return cp_sosfiltfilt(sos, data_gpu)
 
 
-def estimate_delay_gpu(x_gpu, y_gpu, fs):
-    """Corrélation croisée sur GPU"""
-    n = len(x_gpu) + len(y_gpu) - 1
-    nfft = 2 ** int(np.ceil(np.log2(n)))
-    
-    X = cp.fft.rfft(x_gpu, n=nfft)
-    Y = cp.fft.rfft(y_gpu, n=nfft)
-    
-    R = X * cp.conj(Y)
-    r = cp.fft.irfft(R, n=nfft)
-    
-    lag_idx = int(cp.argmax(cp.abs(r)))
-    
-    if lag_idx > nfft // 2:
-        lag_idx -= nfft
-    
-    delay = lag_idx / fs
-    return float(delay)
+def estimate_delay_gpu(x_gpu, y_gpu, fs, max_delay_ms=15.0):
+    """Délai par cross-corrélation FFT sur GPU avec interp sub-échantillon.
+
+    Le lag est restreint à ±max_delay_ms (la ligne de base H1-L1 ~10 ms borne le
+    délai physique) pour éviter de verrouiller sur des pics de glitch lointains.
+    """
+    N = int(min(len(x_gpu), len(y_gpu)))
+    if N < 8:
+        return 0.0
+
+    x = x_gpu[:N] - cp.mean(x_gpu[:N])
+    y = y_gpu[:N] - cp.mean(y_gpu[:N])
+
+    nfft = 1
+    while nfft < 2 * N:
+        nfft *= 2
+
+    X = cp.fft.rfft(x, n=nfft)
+    Y = cp.fft.rfft(y, n=nfft)
+    r = cp.fft.irfft(X * cp.conj(Y), n=nfft)
+    r = cp.concatenate([r[-(N - 1):], r[:N]])
+    lags = cp.arange(-(N - 1), N) / fs
+
+    lim = float(max_delay_ms) / 1000.0
+    mask = (lags >= -lim) & (lags <= lim)
+    if not bool(cp.any(mask)):
+        return 0.0
+
+    r_masked = cp.abs(r[mask])
+    idx = int(cp.argmax(r_masked))
+
+    if 0 < idx < int(r_masked.size) - 1:
+        y1 = float(r_masked[idx - 1])
+        y2 = float(r_masked[idx])
+        y3 = float(r_masked[idx + 1])
+        denom = 2.0 * (y1 - 2.0 * y2 + y3)
+        delta = (y1 - y3) / denom if abs(denom) > 1e-10 else 0.0
+        delta = max(-0.5, min(0.5, delta))
+        lag_samples = float(lags[mask][idx]) * fs + delta
+        return lag_samples / fs
+
+    return float(lags[mask][idx])
 
 
 def welch_psd_gpu(data_gpu, fs, nperseg=2048, noverlap=None):
-    """Welch PSD sur GPU - OPTIMISÉ avec vectorisation"""
+    """Welch PSD sur GPU — médiane sur segments (robuste aux glitches non-gaussiens)."""
     if not isinstance(data_gpu, cp.ndarray):
         data_gpu = cp.asarray(data_gpu)
-    
+
     if noverlap is None:
         noverlap = nperseg // 2
-    
+
     n = len(data_gpu)
-    step = nperseg - noverlap
+    step = max(1, nperseg - noverlap)
     n_segs = max(1, (n - nperseg) // step + 1)
-    
-    # Limiter nombre de segments pour vitesse
-    if n_segs > 100:
-        # Utiliser segments plus espacés
-        step = (n - nperseg) // 100
-        n_segs = min(100, (n - nperseg) // step + 1)
-    
+
     window = cp_tukey(nperseg, 0.25)
-    
+    U = float(cp.sum(window ** 2))
+
     nfreqs = nperseg // 2 + 1
-    psd_sum = cp.zeros(nfreqs, dtype=cp.float64)
-    
-    # Batch processing avec stride tricks (plus rapide que boucle)
+    specs = cp.empty((n_segs, nfreqs), dtype=cp.float64)
+
     for i in range(n_segs):
         start = i * step
         end = start + nperseg
         if end > n:
             break
-        
         seg = data_gpu[start:end] * window
         fft_seg = cp.fft.rfft(seg)
-        psd_sum += cp.abs(fft_seg) ** 2
-    
-    psd = psd_sum / max(1, n_segs)
-    psd /= (cp.sum(window ** 2) * fs)
-    
-    freqs = cp.fft.rfftfreq(nperseg, d=1.0/fs)
-    
+        specs[i] = (2.0 / (fs * U)) * (cp.abs(fft_seg) ** 2)
+
+    psd = cp.median(specs, axis=0)
+    psd = cp.maximum(psd, 1e-60)
+    freqs = cp.fft.rfftfreq(nperseg, d=1.0 / fs)
     return freqs, psd
 
 
@@ -349,7 +334,8 @@ def analyze_event_gpu(
     x_tau = bandpass_gpu(seg_tau_H, fs, bands.tau_band[0], bands.tau_band[1])
     y_tau = bandpass_gpu(seg_tau_L, fs, bands.tau_band[0], bands.tau_band[1])
     
-    tau_hl = -abs(estimate_delay_gpu(x_tau, y_tau, fs))
+    # Le signe du lag encode la direction d'arrivée ; ne pas le forcer en négatif.
+    tau_hl = estimate_delay_gpu(x_tau, y_tau, fs)
     tau_hl_s = float(tau_scale) * tau_hl
     
     if verbose:
@@ -400,25 +386,12 @@ def analyze_event_gpu(
     Hw1 = H1 / cp.sqrt(S1i)
     Hw2 = H2 / cp.sqrt(S2i)
     Hc = Hw1 + Hw2 * cp.exp(-1j * phi)
-    
-    # Edge taper
-    bw = float(f_use[-1] - f_use[0])
-    edge = max(2.0, min(20.0, 0.10 * bw))
-    
-    w = cp.ones_like(f_use, dtype=cp.float64)
-    lo = f_use < (f_use[0] + edge)
-    hi = f_use > (f_use[-1] - edge)
-    
-    if cp.any(lo):
-        w[lo] = 0.5 - 0.5 * cp.cos(cp.pi * (f_use[lo] - f_use[0]) / edge)
-    if cp.any(hi):
-        w[hi] = 0.5 - 0.5 * cp.cos(cp.pi * (f_use[-1] - f_use[hi]) / edge)
-    
-    # Spectre énergétique
-    dEdf = (cp.abs(Hc) ** 2) * (w * w)
-    
-    # Intégration
-    E_internal = trapezoid_gpu(dEdf, f_use) * SCALE_EJ_NORM
+
+    # |Hc|² : densité spectrale phénoménologique. Pas d'apodisation fréquentielle
+    # additionnelle (Butterworth + Tukey temporel traitent déjà les bords).
+    dEdf = cp.abs(Hc) ** 2
+
+    E_internal = trapezoid_gpu(dEdf, f_use)
     energy_J = E_internal * scale_ej_in
     
     # nu_eff
