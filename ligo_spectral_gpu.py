@@ -27,7 +27,6 @@ from gwosc import datasets
 
 try:
     import cupy as cp
-    from cupyx.scipy.signal import butter as cp_butter, sosfiltfilt as cp_sosfiltfilt
     from cupyx.scipy.signal.windows import tukey as cp_tukey
     GPU_AVAILABLE = True
 except ImportError:
@@ -67,14 +66,20 @@ def load_npz(path: str) -> Tuple[np.ndarray, float, float, float]:
 # GPU Helper Functions
 # ============================================================================
 
-def bandpass_gpu(data_gpu, fs, flow, fhigh, order=4):
-    """Bandpass Butterworth sur GPU (sosfiltfilt, phase nulle).
+def bandpass_gpu(data_gpu, fs, flow, fhigh, rolloff=0.1):
+    """Bandpass FFT avec rolloff cosinus doux (pas de Gibbs, pas de cuSOLVER).
 
-    Un masque rectangulaire en FFT génère du ringing de Gibbs :
-    on utilise un filtre SOS causal->rétro (phase nulle) équivalent à la version CPU.
+    Un filtre SOS GPU requiert cuSOLVER/cuSPARSE (souvent cassé selon la
+    version CUDA). Ici on reste en FFT mais on évite le brick-wall en
+    appliquant un demi-cosinus de largeur `rolloff × bw` à chaque bord :
+    équivalent à un FIR à phase linéaire.
     """
     if not isinstance(data_gpu, cp.ndarray):
         data_gpu = cp.asarray(data_gpu)
+
+    n = int(data_gpu.size)
+    if n < 8:
+        return cp.zeros_like(data_gpu)
 
     nyq = 0.5 * fs
     f1 = max(float(flow), 0.1)
@@ -82,11 +87,21 @@ def bandpass_gpu(data_gpu, fs, flow, fhigh, order=4):
     if f2 <= f1:
         f2 = min(0.95 * nyq, f1 + 10.0)
 
-    sos = cp_butter(order, [f1 / nyq, f2 / nyq], btype='band', output='sos')
-    padlen = 3 * (sos.shape[0] - 1)
-    if data_gpu.size <= padlen:
-        return cp.zeros_like(data_gpu)
-    return cp_sosfiltfilt(sos, data_gpu)
+    freqs = cp.fft.rfftfreq(n, d=1.0 / fs)
+    r = max(1.0, float(rolloff) * (f2 - f1))
+
+    lo0, lo1 = f1 - 0.5 * r, f1 + 0.5 * r
+    hi0, hi1 = f2 - 0.5 * r, f2 + 0.5 * r
+
+    mask = cp.ones_like(freqs)
+    mask = cp.where(freqs < lo0, 0.0, mask)
+    rise = (freqs >= lo0) & (freqs <= lo1)
+    mask = cp.where(rise, 0.5 - 0.5 * cp.cos(cp.pi * (freqs - lo0) / r), mask)
+    fall = (freqs >= hi0) & (freqs <= hi1)
+    mask = cp.where(fall, 0.5 + 0.5 * cp.cos(cp.pi * (freqs - hi0) / r), mask)
+    mask = cp.where(freqs > hi1, 0.0, mask)
+
+    return cp.fft.irfft(cp.fft.rfft(data_gpu) * mask, n=n)
 
 
 def estimate_delay_gpu(x_gpu, y_gpu, fs, max_delay_ms=15.0):

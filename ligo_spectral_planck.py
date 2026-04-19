@@ -710,7 +710,7 @@ def analyze_event(
 
     if verbose:
         print(f"=== ANALYSE SPECTRALE {event} ===")
-        print(f"E_total = {E_total:.3e} J ({m_sun_val:.6f} M_sun)")
+        print(f"E_total = {E_total:.3e} J ({m_sun_val:.3e} M_sun)")
         print(f"nu_eff  = {nu_eff:.2f} Hz (nu_scale={nu_scale:.2f})")
         print(f"Tau (H1-L1): {tau_hl:.6e} s")
 
