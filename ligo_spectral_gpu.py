@@ -37,14 +37,6 @@ except ImportError:
 # Constantes physiques
 c = 299792458.0
 M_sun = 1.98847e30
-# Constante de Planck (J·s)
-h = 6.62607015e-34
-
-# Action classique typique (J·s)
-S_classique = 3.193015e4
-
-# Rapport classique / quantique
-SCALE_EJ_NORM = S_classique / h
 
 
 # ============================================================================
@@ -394,25 +386,12 @@ def analyze_event_gpu(
     Hw1 = H1 / cp.sqrt(S1i)
     Hw2 = H2 / cp.sqrt(S2i)
     Hc = Hw1 + Hw2 * cp.exp(-1j * phi)
-    
-    # Edge taper
-    bw = float(f_use[-1] - f_use[0])
-    edge = max(2.0, min(20.0, 0.10 * bw))
-    
-    w = cp.ones_like(f_use, dtype=cp.float64)
-    lo = f_use < (f_use[0] + edge)
-    hi = f_use > (f_use[-1] - edge)
-    
-    if cp.any(lo):
-        w[lo] = 0.5 - 0.5 * cp.cos(cp.pi * (f_use[lo] - f_use[0]) / edge)
-    if cp.any(hi):
-        w[hi] = 0.5 - 0.5 * cp.cos(cp.pi * (f_use[-1] - f_use[hi]) / edge)
-    
-    # Spectre énergétique
-    dEdf = (cp.abs(Hc) ** 2) * (w * w)
-    
-    # Intégration
-    E_internal = trapezoid_gpu(dEdf, f_use) * SCALE_EJ_NORM
+
+    # |Hc|² : densité spectrale phénoménologique. Pas d'apodisation fréquentielle
+    # additionnelle (Butterworth + Tukey temporel traitent déjà les bords).
+    dEdf = cp.abs(Hc) ** 2
+
+    E_internal = trapezoid_gpu(dEdf, f_use)
     energy_J = E_internal * scale_ej_in
     
     # nu_eff

@@ -74,14 +74,7 @@ M_sun = 1.98847e30
 DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
 DEFAULT_PEAK_SCALE = 1.0
-# Constante de Planck (J·s)
-h = 6.62607015e-34
 
-# Action classique typique (J·s)
-S_classique = 3.193015e4
-
-# Rapport classique / quantique
-SCALE_EJ_NORM = S_classique / h
 # ------------------
 # NPZ local loading
 # ------------------
@@ -618,31 +611,18 @@ def analyze_event(
 
     Hc = Hw1 + Hw2 * np.exp(-1j * phi)
 
-    # Note: L'ajout de Virgo (V1) nécessiterait un délai H-V et est omis pour simplifier
-    # Si vous voulez l'ajouter, calculez tau_HV et ajoutez H3 de manière similaire
-
-    # taper edges in frequency
-    bw = max(1e-9, float(f_use[-1] - f_use[0]))
-    edge = min(20.0, 0.10 * bw)
-    edge = max(edge, 2.0)
-
-    w = np.ones_like(f_use, dtype=np.float64)
-    lo = f_use < (f_use[0] + edge)
-    hi = f_use > (f_use[-1] - edge)
-    w[lo] = 0.5 - 0.5 * np.cos(np.pi * (f_use[lo] - f_use[0]) / edge)
-    w[hi] = 0.5 - 0.5 * np.cos(np.pi * (f_use[-1] - f_use[hi]) / edge)
-    psi2 = w * w
-
-    dEdf = (np.abs(Hc) ** 2) * psi2
+    # Densité spectrale d'"énergie" phénoménologique : |Hc|².
+    # Le bandpass Butterworth + Tukey temporel traitent déjà les bords de bande ;
+    # une apodisation supplémentaire en fréquence n'a pas de sens dimensionnel
+    # et introduirait une dépendance non physique à la largeur de bande d'analyse.
+    dEdf = np.abs(Hc) ** 2
     dEdf = np.nan_to_num(dEdf, nan=0.0, posinf=0.0, neginf=0.0)
 
     # -------------------------------------------------
     # Énergie spectrale
     # -------------------------------------------------
-    # E_internal = énergie brute (sans SCALE_EJ, pour calibration)
+    # E_internal : intégrale brute, calibrée ensuite par SCALE_EJ (LSQ par cluster).
     E_internal = float(trapezoid(dEdf, f_use))
-    E_internal *= SCALE_EJ_NORM
-    # energy_J = énergie calibrée (avec SCALE_EJ)
     energy_J = E_internal * scale_ej_in
 
     # -------------------------------------------------
