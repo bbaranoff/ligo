@@ -356,8 +356,7 @@ def analyze_event_gpu(
         _t3 = _time.time()
         print(f"   Tau estimation: {_t3-_t2:.3f}s")
     
-    # Signal segment
-    # Signal segment (window_scale appliqué)
+    # Signal segment (sans le clamp appliqué à la fenêtre de tau)
     signal_win_eff = signal_win * window_scale
 
     s0 = gps - signal_win_eff / 2.0
