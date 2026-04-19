@@ -18,15 +18,19 @@ Usage:
     )
 """
 
-import os
 import numpy as np
 from typing import Dict, Any, List
-import cupy as cp
+
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
 from ligo_spectral_gpu import (
-    analyze_event_gpu, 
+    analyze_event_gpu,
     GPU_AVAILABLE,
     get_npz_path,
-    load_npz
+    load_npz,
 )
 
 
@@ -49,78 +53,58 @@ def analyze_events_batch_gpu(
         Liste de résultats
     """
     
-    if not GPU_AVAILABLE:
+    if not GPU_AVAILABLE or cp is None:
         raise RuntimeError("GPU requis")
-    
+
+    import concurrent.futures
+
     results = []
-    
-    # Traiter par batches
+
     for i in range(0, len(events), batch_size):
         batch = events[i:i+batch_size]
-        
-        #print(f"\n📦 Batch {i//batch_size + 1}/{(len(events)-1)//batch_size + 1}: {len(batch)} événements")
-        
-        # Pré-charger TOUS les événements du batch sur GPU
+
+        # Pré-charger les événements du batch sur GPU
         batch_data = {}
-        total_mem = 0
-        
         for event in batch:
             try:
                 pH = get_npz_path(event, "H1", kwargs.get('npz_dir', 'data/npz'))
                 pL = get_npz_path(event, "L1", kwargs.get('npz_dir', 'data/npz'))
-                
+
                 hH_cpu, fsH, t0H, t1H = load_npz(pH)
                 hL_cpu, fsL, t0L, t1L = load_npz(pL)
-                
-                # Transférer GPU
-                hH_gpu = cp.array(hH_cpu, dtype=cp.float64)
-                hL_gpu = cp.array(hL_cpu, dtype=cp.float64)
-                
+
                 batch_data[event] = {
-                    'hH': hH_gpu,
-                    'hL': hL_gpu,
+                    'hH': cp.array(hH_cpu, dtype=cp.float64),
+                    'hL': cp.array(hL_cpu, dtype=cp.float64),
                     'fs': fsH,
                     't0H': t0H,
                     't0L': t0L,
                     't1H': t1H,
                     't1L': t1L,
                 }
-                
-                total_mem += hH_gpu.nbytes + hL_gpu.nbytes
-                
             except Exception as e:
                 print(f"   ⚠️  {event}: {e}")
-        
-        #print(f"   💾 GPU chargé: {total_mem / 1e9:.2f} GB ({len(batch_data)} événements)")
-        
-        # Traiter en parallèle (CuPy gère le pipeline automatiquement)
-        import concurrent.futures
-        
+
         def process_one(event):
             if event not in batch_data:
                 return None
             try:
-                # analyze_event_gpu va réutiliser les données déjà sur GPU
-                # si on les passait directement (à implémenter)
                 return analyze_event_gpu(event, params, **kwargs)
             except Exception as e:
                 print(f"   ❌ {event}: {e}")
                 return None
-        
-        # Lancer en parallèle CPU (pour orchestration)
-        # Le GPU exécute les kernels en pipeline
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
             batch_results = list(executor.map(process_one, batch))
-        
+
         results.extend([r for r in batch_results if r is not None])
-        
-        # Libérer batch
+
         for data in batch_data.values():
             del data['hH']
             del data['hL']
-        
+
         cp.get_default_memory_pool().free_all_blocks()
-    
+
     return results
 
 
@@ -146,59 +130,6 @@ def estimate_optimal_batch_size(gpu_mem_gb: float = 16.0,
     batch_size = min(32, max(1, batch_size))
     
     return batch_size
-
-
-# ============================================================================
-# Version OPTIMALE : Stream processing avec préchargement
-# ============================================================================
-
-class GPUStreamProcessor:
-    """
-    Processeur GPU avec pipeline asynchrone
-    
-    Pendant que le GPU calcule le batch N, le CPU charge le batch N+1
-    """
-    
-    def __init__(self, batch_size: int = 8):
-        self.batch_size = batch_size
-        self.stream = cp.cuda.Stream() if GPU_AVAILABLE else None
-    
-    def process_events(
-        self,
-        events: List[str],
-        params: Dict[str, Any],
-        **kwargs
-    ) -> List[Dict[str, Any]]:
-        """Process avec pipeline asynchrone"""
-        
-        results = []
-        
-        for i in range(0, len(events), self.batch_size):
-            batch = events[i:i+self.batch_size]
-            
-            # Charger batch N+1 pendant calcul batch N (à implémenter)
-            batch_results = self._process_batch(batch, params, **kwargs)
-            results.extend(batch_results)
-        
-        return results
-    
-    def _process_batch(self, batch, params, **kwargs):
-        """Process un batch"""
-        results = []
-        
-        # Utiliser stream pour pipeline
-        with self.stream:
-            for event in batch:
-                try:
-                    result = analyze_event_gpu(event, params, **kwargs)
-                    results.append(result)
-                except Exception as e:
-                    print(f"   ❌ {event}: {e}")
-        
-        # Synchroniser
-        self.stream.synchronize()
-        
-        return results
 
 
 # ============================================================================

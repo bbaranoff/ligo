@@ -1175,10 +1175,10 @@ def main() -> None:
         print(f"[cal] TAU_SCALE={tau_scale:.6e} SCALE_EJ={scale:.6e}")
         with open(args.cal_out, "w") as f:
             json.dump({
-                "TAU_SCALE": float(tau_scale), 
-        "NU_SCALE": float(nu_scale),
-                "SCALE_EJ": float(scale), 
-                "PEAK_SCALE": float(args.peak_scale)
+                "TAU_SCALE": float(tau_scale),
+                "NU_SCALE": float(args.nu_scale),
+                "SCALE_EJ": float(scale),
+                "PEAK_SCALE": float(args.peak_scale),
             }, f, indent=2)
         print(f"[cal] wrote {args.cal_out}")
         return

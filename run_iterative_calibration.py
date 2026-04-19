@@ -20,34 +20,59 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 import cluster_latent_kmeans as clk
-from ligo_spectral_gpu_batch import analyze_events_batch_gpu
 
 
-# GPU version si disponible
 try:
     import ligo_spectral_gpu as lsp
+    from ligo_spectral_gpu_batch import analyze_events_batch_gpu
     print("[INFO] Utilisation de ligo_spectral_gpu - Mode GPU")
     GPU_MODE = True
 except ImportError:
     import ligo_spectral_planck as lsp
+    analyze_events_batch_gpu = None
     print("[INFO] Utilisation de ligo_spectral_planck - Mode CPU")
     GPU_MODE = False
 
+
+def _analyze_events_cpu(
+    events, params, bands, peak_scale, tau_scale, window_scale,
+    scale_ej_in=1.0, verbose=False, **extra,
+):
+    """CPU equivalent of analyze_events_batch_gpu via analyze_event."""
+    results = []
+    for ev in events:
+        try:
+            results.append(lsp.analyze_event(
+                event=ev, params=params, bands=bands,
+                peak_scale=peak_scale, tau_scale=tau_scale,
+                nu_scale=window_scale, scale_ej_in=scale_ej_in,
+                plot=False, return_internals=False, verbose=verbose,
+                **extra,
+            ))
+        except Exception:
+            results.append(None)
+    return results
+
+
+def _analyze_events(events, params, bands, **kwargs):
+    if GPU_MODE:
+        return analyze_events_batch_gpu(
+            events=events, params=params, bands=bands,
+            batch_size=kwargs.pop("batch_size", 32),
+            **kwargs,
+        )
+    kwargs.pop("batch_size", None)
+    return _analyze_events_cpu(events, params, bands, **kwargs)
+
 def filter_analyze_kwargs(kwargs: Dict) -> Dict:
-    """
-    Filtre les kwargs passés à analyze_event / analyze_events_batch_gpu
-    pour éviter les arguments non supportés côté GPU.
-    """
+    """Filtre les kwargs passés à analyze_event / analyze_events_batch_gpu."""
     if not kwargs:
         return {}
 
     out = dict(kwargs)
-
-    # Incompatibilités connues GPU
     out.pop("plot", None)
     out.pop("return_internals", None)
-    out.pop("verbose", None)  # déjà passé explicitement
-
+    out.pop("verbose", None)
     return out
 
 
@@ -62,17 +87,16 @@ def compute_scale_ej_optimal(
     **analyze_kwargs,
 ) -> float:
     """Calcule SCALE_EJ optimal par moindres carrés avec paramètres fixés"""
-    
-    M_internal_list = []
-    results = analyze_events_batch_gpu(
+
+    results = _analyze_events(
         events=events,
         params=params,
-        batch_size=32,        # 8–16 sur RTX 4090
+        batch_size=32,
         bands=bands,
         peak_scale=peak_scale,
         tau_scale=tau_scale,
         window_scale=window_scale,
-        scale_ej_in=1.0,     # normalisé comme avant
+        scale_ej_in=1.0,
         verbose=False,
         **analyze_kwargs,
     )
@@ -168,18 +192,15 @@ def calibrate_iterative(
         
         print(f"     SCALE_EJ = {scale_ej_new:.6e} → TAU = {tau_scale_new:.6f}")
         
-        # ÉTAPE 3: Optimiser NU
         # ÉTAPE 3: Optimiser NU (SUR E_internal, PAS msun_c2)
         best_nu = window_scale
         best_mae = float('inf')
 
         E_ref = M_ref * (lsp.M_sun * lsp.c * lsp.c)
-
-        from ligo_spectral_gpu_batch import analyze_events_batch_gpu
         akw = filter_analyze_kwargs(analyze_kwargs)
 
         for nu_test in nu_values:
-            results = analyze_events_batch_gpu(
+            results = _analyze_events(
                 events=valid_events,
                 params=params,
                 batch_size=32,
@@ -449,18 +470,20 @@ def main():
             if ev not in M_ref_dict:
                 continue
             try:
+                nu_kwarg = {"window_scale": best_nu} if GPU_MODE else {"nu_scale": best_nu}
                 result = lsp.analyze_event(
                     event=ev, params=params, bands=bands,
                     peak_scale=args.peak_scale, tau_scale=best_tau,
-                    window_scale=best_nu, scale_ej_in=best_scale,
+                    scale_ej_in=best_scale,
                     flow=args.flow, fhigh=args.fhigh,
                     signal_win=args.signal_win, noise_pad=args.noise_pad,
                     peak_quantile=args.peak_quantile,
                     plot=False, return_internals=False, verbose=False,
+                    **nu_kwarg,
                 )
                 M_pred = result.get("msun_c2", 0)
                 errors[ev] = (M_pred - M_ref_dict[ev]) / M_ref_dict[ev] * 100
-            except:
+            except Exception:
                 pass
     
     # Save
