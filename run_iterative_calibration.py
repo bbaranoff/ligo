@@ -392,7 +392,6 @@ def main():
     ap.add_argument("--fhigh", type=float, default=None)
     ap.add_argument("--tau-band", type=float, nargs=2, default=[35.0, 250.0])
     ap.add_argument("--nu-band", type=float, nargs=2, default=[30.0, 350.0])
-    ap.add_argument("--no-virgo", action="store_true")
     ap.add_argument("--peak-quantile", type=float, default=99.5)
     
     # Output

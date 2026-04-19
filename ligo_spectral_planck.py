@@ -65,20 +65,11 @@ from scipy.optimize import minimize
 
 from gwosc import datasets
 
-try:
-    from numba import njit
-except Exception:  # pragma: no cover
-    def njit(*args, **kwargs):
-        def deco(fn):
-            return fn
-        return deco
-
 # ------------------
 # Constantes
 # ------------------
 c = 299792458.0
 M_sun = 1.98847e30
-Mpc = 3.085677581491367e22
 
 DEFAULT_TAU_SCALE = 1.0
 DEFAULT_SCALE_EJ = 1.0
@@ -197,10 +188,13 @@ def psd_welch_median(
     fs: float,
     seglen: float = 4.0,
     overlap: float = 2.0,
-    fmin: float = 10.0,
-    fmax: float = 1024.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """PSD robuste par médiane de Welch (fenêtre Tukey), tolérante aux NaN."""
+    """PSD robuste par médiane de Welch (fenêtre Tukey), tolérante aux NaN.
+
+    Une PSD doit refléter le bruit brut : aucun filtre passe-bande n'est appliqué
+    aux segments (ça biaiserait la densité spectrale aux bords de bande).
+    La normalisation est celle de Welch one-sided : 2/(fs·U).
+    """
     x = np.asarray(x, float)
     if x.size < 8:
         f = np.fft.rfftfreq(max(8, int(fs)), d=1.0 / fs)
@@ -226,11 +220,6 @@ def psd_welch_median(
 
         if not np.isfinite(seg).all():
             seg = np.nan_to_num(seg, nan=0.0, posinf=0.0, neginf=0.0)
-
-        seg = seg - float(np.mean(seg))
-        seg = safe_bandpass(seg, fs, fmin, fmax)
-        if not np.isfinite(seg).all():
-            continue
 
         X = np.fft.rfft(seg * win)
         Pxx = (2.0 / (fs * U)) * (np.abs(X) ** 2)
@@ -395,41 +384,6 @@ def nu_eff_energy(f: np.ndarray, dEdf: np.ndarray) -> float:
     return float(nu) if np.isfinite(nu) else 0.0
 
 
-@njit(cache=True, fastmath=True)
-def coherent_energy_numba(H1, H2, S1, S2, phi, f, r):
-    """Calcul optimisé de l'énergie cohérente (H1+H2 seulement)."""
-    n = H1.shape[0]
-    out = np.empty(n, dtype=np.float64)
-    eps = 1e-30
-    for i in range(n):
-        s1 = S1[i] if S1[i] > eps else eps
-        s2 = S2[i] if S2[i] > eps else eps
-        w1 = 1.0 / s1
-        w2 = 1.0 / s2
-        ph = phi[i]
-        c = math.cos(ph)
-        s = math.sin(ph)
-        re = c
-        im = s
-
-        a = H1[i] * w1
-        b = H2[i] * w2
-        br = b.real * re - b.imag * im
-        bi = b.real * im + b.imag * re
-
-        numr = a.real + br
-        numi = a.imag + bi
-        den = w1 + w2 + eps
-
-        Hcr = numr / den
-        Hci = numi / den
-
-        ff = f[i]
-        out[i] = (r * r) * (ff * ff) * (Hcr * Hcr + Hci * Hci)
-
-    return out
-
-
 @dataclass
 class Bands:
     tau_band: Tuple[float, float]
@@ -445,7 +399,6 @@ def analyze_event(
     noise_pad: Optional[float] = None,
     distance_mpc: Optional[float] = None,
     bands: Optional[Bands] = None,
-    use_virgo: bool = True,
     npz_dir: str = "data/npz",
     peak_norm: bool = False,
     peak_quantile: float = 99.5,
@@ -468,7 +421,6 @@ def analyze_event(
         noise_pad: Padding avant le signal pour estimer le bruit [s]
         distance_mpc: Distance de l'événement [Mpc]
         bands: Bandes pour tau et nu
-        use_virgo: Utiliser Virgo si disponible
         npz_dir: Répertoire contenant les fichiers NPZ
         peak_norm: Normaliser par le peak
         peak_quantile: Quantile pour le peak
@@ -561,25 +513,6 @@ def analyze_event(
     fs = fsH
     used = ["H1", "L1"]
 
-    # ---------- Virgo (V1) ----------
-    hV = fsV = t0V = t1V = None
-
-    if use_virgo:
-        try:
-            pV = get_npz_path(event, "V1", npz_dir)
-            hV, fsV, t0V, t1V = load_npz(pV)
-
-            if fsV != fs:
-                raise RuntimeError("Sample rate mismatch V1")
-
-            used.append("V1")
-            if verbose:
-                print(f"[INFO] Virgo (V1) chargé pour {event}")
-        except (FileNotFoundError, Exception) as e:
-            if verbose:
-                print(f"[INFO] Virgo (V1) indisponible pour {event}: {e}")
-            hV = None
-
     # -----------------------------
     # 2) Noise segment for PSD
     # -----------------------------
@@ -594,15 +527,8 @@ def analyze_event(
     noiseL = crop_array(hL, fs, t0L, n0, n1)
 
     # PSD H1/L1 (obligatoires)
-    f_psd_H, S1 = psd_welch_median(noiseH, fs, fmin=flow, fmax=fhigh)
-    f_psd_L, S2 = psd_welch_median(noiseL, fs, fmin=flow, fmax=fhigh)
-
-    # PSD V1 (optionnelle)
-    if hV is not None:
-        noiseV = crop_array(hV, fs, t0V, n0, n1)
-        f_psd_V, S3 = psd_welch_median(noiseV, fs, fmin=flow, fmax=fhigh)
-    else:
-        f_psd_V = S3 = None
+    f_psd_H, S1 = psd_welch_median(noiseH, fs)
+    f_psd_L, S2 = psd_welch_median(noiseL, fs)
 
     f_psd_H, S1 = sanitize_psd(f_psd_H, S1, name="PSD_H1")
     f_psd_L, S2 = sanitize_psd(f_psd_L, S2, name="PSD_L1")
@@ -610,29 +536,29 @@ def analyze_event(
     # -----------------------------
     # 3) Tau (H1-L1) estimation
     # -----------------------------
+    # nu_scale est un multiplicateur sans dimension de la fenêtre d'intégration,
+    # pas une durée en secondes (équivalent GPU window_scale).
     tb0, tb1 = bands.tau_band
-    seg_tau_H = crop_array(hH, fs, t0H, gps - nu_scale, gps + nu_scale)
-    seg_tau_L = crop_array(hL, fs, t0L, gps - nu_scale, gps + nu_scale)
+    tau_half = 0.5 * signal_win * float(nu_scale)
+    seg_tau_H = crop_array(hH, fs, t0H, gps - tau_half, gps + tau_half)
+    seg_tau_L = crop_array(hL, fs, t0L, gps - tau_half, gps + tau_half)
 
     x_tau = safe_bandpass(seg_tau_H, fs, *bands.tau_band)
     y_tau = safe_bandpass(seg_tau_L, fs, *bands.tau_band)
 
-    tau_hl = -abs(estimate_delay_time(x_tau, y_tau, fs))
-    # Apply tau_scale to tau
+    # Le signe du lag encode la direction d'arrivée (L1 vs H1) ; ne pas le forcer.
+    # Le cross-delay est borné physiquement par la base H1-L1 (~10 ms) dans estimate_delay_time.
+    tau_hl = estimate_delay_time(x_tau, y_tau, fs)
     tau_hl_s = float(tau_scale) * tau_hl
 
     # -----------------------------
     # 4) Signal segment
     # -----------------------------
-    s0 = gps - (signal_win / 2.0)
-    s1 = gps + (signal_win / 2.0)
+    signal_win_eff = signal_win * float(nu_scale)
+    s0 = gps - (signal_win_eff / 2.0)
+    s1 = gps + (signal_win_eff / 2.0)
     hH_raw = crop_array(hH, fs, t0H, s0, s1)
     hL_raw = crop_array(hL, fs, t0L, s0, s1)
-
-    if hV is not None:
-        hV_raw = crop_array(hV, fs, t0V, s0, s1)
-    else:
-        hV_raw = None
 
     # Apply peak_scale to raw segments
     hH = hH_raw * float(peak_scale)
@@ -678,9 +604,8 @@ def analyze_event(
     S2i = np.maximum(S2i, 1e-60)
 
     phi = (2.0 * np.pi * f_use * tau_hl_s).astype(np.float64)
-    r = float(distance_mpc) * Mpc
 
-    # whitened coherent sum (H1 + H2 seulement, V1 ignoré pour simplifier)
+    # whitened coherent sum H1-L1 (Virgo non utilisé ici)
     Hw1 = H1 / np.sqrt(S1i)
     Hw2 = H2 / np.sqrt(S2i)
 
@@ -1026,7 +951,6 @@ def main() -> None:
     ap.add_argument("--event-params", default="event_params.json", help="JSON params events")
     ap.add_argument("--list-events", action="store_true", help="Liste les events du JSON")
 
-    ap.add_argument("--no-virgo", action="store_true", help="N'essaie pas V1")
 
     ap.add_argument("--flow", type=float, default=None)
     ap.add_argument("--fhigh", type=float, default=None)
@@ -1162,7 +1086,6 @@ def main() -> None:
             signal_win=args.signal_win,
             noise_pad=args.noise_pad,
             distance_mpc=None,
-            use_virgo=not args.no_virgo,
             peak_quantile=args.peak_quantile,
         )
     elif do_use_cal:
@@ -1227,7 +1150,6 @@ def main() -> None:
         noise_pad=noise_pad,
         distance_mpc=distance_mpc,
         bands=bands,
-        use_virgo=not args.no_virgo,
         peak_norm=bool(args.peak_norm),
         peak_quantile=float(args.peak_quantile),
         tau_scale=float(args.tau_scale),
