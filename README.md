@@ -53,7 +53,7 @@ ligo_refs.json              # ΔM (msun_c2) et E_J (energy_J) officiels GWTC
 ```bash
 python3 -m venv .env
 source .env/bin/activate
-pip install gwosc
+pip install gwosc numpy
 python3 download_all_npz.py
 #optional (already in repo) python write_events.py
 ```
